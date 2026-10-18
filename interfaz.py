@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -92,7 +93,9 @@ class Aplicacion(ctk.CTk):
         self.enlaces: list = datos.cargar_enlaces(self.ruta)
         # Tk no es seguro entre hilos. El hilo de red solo deja el
         # resultado aqui; el hilo principal lo aplica con after().
-        self._resultados: queue.Queue[tuple[int, str, int | None, str, str]] = queue.Queue()
+        # La cola guarda el diccionario, no su posición: si se borra
+        # otro enlace, el resultado no se escribe en el de al lado.
+        self._resultados: queue.Queue[tuple[dict, str, int | None, str, str]] = queue.Queue()
         self.fuente_titulo = ctk.CTkFont(size=15, weight="bold")
         self.fuente_url = ctk.CTkFont(size=13)
         self.fuente_detalle = ctk.CTkFont(size=12)
@@ -167,11 +170,15 @@ class Aplicacion(ctk.CTk):
         self.after(100, self._recoger_resultados)
 
     def anadir(self) -> None:
-        """Normaliza la URL, la guarda como pendiente y verifica en segundo plano."""
+        """Normaliza la URL, rechaza duplicados y verifica en segundo plano."""
         try:
             url = verificador.normalizar_url(self.entrada.get())
         except ValueError:
             self.aviso.configure(text="Ese enlace no es válido. Usa una dirección http o https.")
+            return
+
+        if self._es_duplicado(url):
+            self.aviso.configure(text="Ese enlace ya está en la lista.")
             return
 
         self.aviso.configure(text="")
@@ -184,20 +191,29 @@ class Aplicacion(ctk.CTk):
             self.aviso.configure(text="No se pudo guardar el enlace.")
             return
 
-        indice = len(self.enlaces) - 1
         self.entrada.delete(0, "end")
         self.refrescar_lista()
         hilo = threading.Thread(
             target=self._verificar_en_segundo_plano,
-            args=(indice, url),
+            args=(enlace, url),
             daemon=True,
         )
         hilo.start()
 
-    def _verificar_en_segundo_plano(self, indice: int, url: str) -> None:
+    def _es_duplicado(self, url: str) -> bool:
+        clave = verificador.clave_url(url)
+        for existente in self.enlaces:
+            try:
+                if verificador.clave_url(str(existente.get("url") or "")) == clave:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    def _verificar_en_segundo_plano(self, enlace: dict, url: str) -> None:
         estado, codigo, titulo = verificador.verificar_url(url)
         momento = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        self._resultados.put((indice, estado, codigo, titulo, momento))
+        self._resultados.put((enlace, estado, codigo, titulo, momento))
 
     def _recoger_resultados(self) -> None:
         """Aplica lo que el hilo de red ya termino. Corre en el hilo principal."""
@@ -208,15 +224,18 @@ class Aplicacion(ctk.CTk):
             return
         try:
             while True:
-                indice, estado, codigo, titulo, momento = self._resultados.get_nowait()
-                self._aplicar_verificacion(indice, estado, codigo, titulo, momento)
+                enlace, estado, codigo, titulo, momento = self._resultados.get_nowait()
+                self._aplicar_verificacion(enlace, estado, codigo, titulo, momento)
         except queue.Empty:
             pass
         self.after(100, self._recoger_resultados)
 
+    def _sigue_en_lista(self, enlace: dict) -> bool:
+        return any(item is enlace for item in self.enlaces)
+
     def _aplicar_verificacion(
         self,
-        indice: int,
+        enlace: dict,
         estado: str,
         codigo: int | None,
         titulo: str,
@@ -228,10 +247,9 @@ class Aplicacion(ctk.CTk):
                 return
         except Exception:
             return
-        if indice < 0 or indice >= len(self.enlaces):
+        if not self._sigue_en_lista(enlace):
             return
 
-        enlace = self.enlaces[indice]
         enlace["estado"] = estado
         enlace["codigo_http"] = codigo
         enlace["titulo"] = titulo
@@ -256,6 +274,153 @@ class Aplicacion(ctk.CTk):
             return
         for enlace in self.enlaces:
             self._crear_fila(enlace)
+
+    def abrir(self, enlace: dict) -> None:
+        """Abre la URL en el navegador y, si arranca, marca el enlace como visitado."""
+        if not self._sigue_en_lista(enlace):
+            return
+        url = str(enlace.get("url") or "")
+        try:
+            abierto = webbrowser.open(url)
+        except Exception:
+            abierto = False
+        if not abierto:
+            self.aviso.configure(text="No se pudo abrir el enlace.")
+            return
+
+        self.aviso.configure(text="")
+        enlace["visitado"] = True
+        try:
+            datos.guardar_enlaces(self.enlaces, self.ruta)
+        except OSError:
+            self.aviso.configure(text="No se pudo guardar el enlace.")
+            return
+        self.refrescar_lista()
+
+    def copiar(self, enlace: dict, boton: ctk.CTkButton) -> None:
+        """Copia la URL y cambia el icono a check durante un segundo."""
+        url = str(enlace.get("url") or "")
+        self.clipboard_clear()
+        self.clipboard_append(url)
+        self.update_idletasks()
+        boton.configure(image=self.iconos["check"])
+        pendiente = getattr(boton, "_aviso_copiado", None)
+        if pendiente is not None:
+            self.after_cancel(pendiente)
+        boton._aviso_copiado = self.after(1000, lambda b=boton: self._restaurar_copiar(b))
+
+    def _restaurar_copiar(self, boton: ctk.CTkButton) -> None:
+        try:
+            if boton.winfo_exists():
+                boton.configure(image=self.iconos["copiar"])
+        except Exception:
+            return
+
+    def confirmar_eliminar(self, enlace: dict) -> None:
+        """Pide confirmación antes de quitar el enlace."""
+        if not self._sigue_en_lista(enlace):
+            return
+        dialogo = getattr(self, "_dialogo_eliminar", None)
+        if dialogo is not None:
+            try:
+                if dialogo.winfo_exists():
+                    dialogo.lift()
+                    return
+            except Exception:
+                pass
+
+        dialogo = ctk.CTkToplevel(self)
+        self._dialogo_eliminar = dialogo
+        dialogo.title("Eliminar enlace")
+        dialogo.resizable(False, False)
+        dialogo.configure(fg_color=COLORES["fondo"])
+        dialogo.transient(self)
+        self.update_idletasks()
+        ancho, alto = 480, 210
+        x = self.winfo_rootx() + max(0, (self.winfo_width() - ancho) // 2)
+        y = self.winfo_rooty() + max(0, (self.winfo_height() - alto) // 2)
+        dialogo.geometry(f"{ancho}x{alto}+{x}+{y}")
+
+        ctk.CTkLabel(
+            dialogo,
+            text="¿Eliminar este enlace?",
+            text_color=COLORES["texto"],
+            font=self.fuente_titulo,
+        ).pack(anchor="w", padx=24, pady=(22, 8))
+        ctk.CTkLabel(
+            dialogo,
+            text=str(enlace.get("url") or ""),
+            wraplength=430,
+            justify="left",
+            anchor="w",
+            text_color=COLORES["secundario"],
+            font=self.fuente_url,
+        ).pack(anchor="w", padx=24, pady=(0, 16))
+
+        acciones = ctk.CTkFrame(dialogo, fg_color="transparent")
+        acciones.pack(anchor="e", padx=24, pady=(0, 20))
+        ctk.CTkButton(
+            acciones,
+            text="Cancelar",
+            width=110,
+            height=36,
+            corner_radius=8,
+            fg_color=COLORES["barra"],
+            hover_color=COLORES["borde"],
+            text_color=COLORES["texto"],
+            command=dialogo.destroy,
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            acciones,
+            text="Eliminar",
+            width=110,
+            height=36,
+            corner_radius=8,
+            fg_color=COLORES_ESTADO["caído"],
+            hover_color="#C4473A",
+            text_color=COLORES["texto_boton"],
+            command=lambda: self._eliminar(enlace, dialogo),
+        ).pack(side="left")
+
+        dialogo.protocol("WM_DELETE_WINDOW", dialogo.destroy)
+        dialogo.bind("<Escape>", lambda _evento: dialogo.destroy())
+        dialogo.after(50, dialogo.lift)
+        dialogo.after(50, dialogo.focus)
+        dialogo.grab_set()
+
+    def _eliminar(self, enlace: dict, dialogo: ctk.CTkToplevel) -> None:
+        try:
+            dialogo.destroy()
+        except Exception:
+            pass
+        if not self._sigue_en_lista(enlace):
+            return
+        self.enlaces = [item for item in self.enlaces if item is not enlace]
+        try:
+            datos.guardar_enlaces(self.enlaces, self.ruta)
+        except OSError:
+            self.aviso.configure(text="No se pudo guardar el enlace.")
+            return
+        self.aviso.configure(text="")
+        self.refrescar_lista()
+
+    def _boton_fila(self, padre: ctk.CTkFrame, icono: str, comando) -> ctk.CTkButton:
+        return ctk.CTkButton(
+            padre,
+            text="",
+            image=self.iconos[icono],
+            width=36,
+            height=36,
+            corner_radius=8,
+            fg_color=COLORES["fondo"],
+            hover_color=COLORES["borde"],
+            command=comando,
+        )
+
+    def _ligar_doble_clic(self, widget, enlace: dict) -> None:
+        widget.bind("<Double-Button-1>", lambda _evento, e=enlace: self.abrir(e))
+        for hijo in widget.winfo_children():
+            self._ligar_doble_clic(hijo, enlace)
 
     def _crear_fila(self, enlace: dict) -> None:
         estado = str(enlace.get("estado") or "pendiente")
@@ -287,7 +452,7 @@ class Aplicacion(ctk.CTk):
             text=str(enlace.get("url") or ""),
             anchor="w",
             justify="left",
-            wraplength=560,
+            wraplength=480,
             text_color=COLORES["secundario"],
             font=self.fuente_url,
             fg_color="transparent",
@@ -312,7 +477,20 @@ class Aplicacion(ctk.CTk):
                 text="",
                 image=self.iconos["check"],
                 fg_color="transparent",
-            ).grid(row=0, column=2, padx=(4, 16), pady=16)
+            ).grid(row=0, column=2, padx=(4, 8), pady=16)
+
+        acciones = ctk.CTkFrame(fila, fg_color="transparent")
+        acciones.grid(row=0, column=3, padx=(4, 12), pady=12)
+        self._boton_fila(acciones, "abrir", lambda e=enlace: self.abrir(e)).pack(side="left", padx=3)
+        boton_copiar = self._boton_fila(acciones, "copiar", lambda: None)
+        boton_copiar.configure(command=lambda e=enlace, b=boton_copiar: self.copiar(e, b))
+        boton_copiar.pack(side="left", padx=3)
+        self._boton_fila(acciones, "eliminar", lambda e=enlace: self.confirmar_eliminar(e)).pack(
+            side="left", padx=3
+        )
+        fila.bind("<Double-Button-1>", lambda _evento, e=enlace: self.abrir(e))
+        self._ligar_doble_clic(punto, enlace)
+        self._ligar_doble_clic(textos, enlace)
 
 
 def _mostrar_error(mensaje: str) -> None:

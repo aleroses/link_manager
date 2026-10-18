@@ -80,6 +80,31 @@ def normalizar_url(url: str) -> str:
     return limpia
 
 
+def clave_url(url: str) -> str:
+    """Clave para detectar duplicados. No es la URL que se guarda.
+
+    Esquema y host van en minúsculas, se quita la barra final (la raíz
+    se queda en /) y se ignora el fragmento. La query se conserva, así
+    que ?id=1 y ?id=2 siguen siendo enlaces distintos.
+    """
+    partes = urlparse(normalizar_url(url))
+    esquema = partes.scheme.lower()
+    host = (partes.hostname or "").lower()
+    if ":" in host:
+        host = f"[{host}]"
+    puerto = partes.port
+    if (esquema == "http" and puerto == 80) or (esquema == "https" and puerto == 443):
+        puerto = None
+    autoridad = f"{host}:{puerto}" if puerto else host
+    ruta = partes.path or "/"
+    if len(ruta) > 1 and ruta.endswith("/"):
+        ruta = ruta.rstrip("/")
+    clave = f"{esquema}://{autoridad}{ruta}"
+    if partes.query:
+        clave = f"{clave}?{partes.query}"
+    return clave
+
+
 def clasificar_codigo(codigo: int) -> str:
     """Traduce un código HTTP al estado que guarda la aplicación."""
     if 200 <= codigo <= 399:

@@ -145,3 +145,36 @@ Los iconos de Lucide 0.469.0 (licencia ISC) están en `assets/icons/`: el SVG or
 - Filtros, búsqueda, categorías editables, CSV y contadores (fase 6).
 - Pulido y notas de PyInstaller (fase 7).
 - Crear la rama `debian` al validar en Linux.
+
+## 2026-10-17 — Fase 4: Abrir, copiar, eliminar y duplicados
+
+### Qué se hizo
+
+Cada fila tiene tres botones de icono: Abrir, Copiar URL y Eliminar. Abrir usa `webbrowser` y, si el navegador arranca, pone `visitado` en verdadero y muestra el icono check. El doble clic sobre el texto de la fila hace lo mismo. Copiar deja la URL en el portapapeles y cambia el icono a check durante un segundo. Eliminar abre un diálogo oscuro con Cancelar y Eliminar. Un enlace repetido no se guarda: el aviso dice que ya está en la lista.
+
+### Decisiones técnicas y por qué
+
+- `verificador.clave_url` compara sin distinguir mayúsculas en el esquema y el host, sin la barra final y sin el fragmento. La query se conserva, porque `?id=1` y `?id=2` son páginas distintas. La URL que se guarda sigue siendo la de `normalizar_url`; las ya guardadas no se reescriben.
+- El diálogo es un `CTkToplevel` con los colores de la aplicación. Un `messagebox` del sistema se vería distinto en Windows y en Debian.
+- El hilo de red ya no devuelve la posición del enlace. Devuelve el diccionario. Si ese objeto ya no está en la lista (porque se eliminó), el resultado se descarta. Así borrar el de arriba no escribe el estado en el de abajo. `list.remove` compara por contenido, no por identidad, así que la baja se hace filtrando con `is`.
+- El portapapeles usa `clipboard_clear` y `clipboard_append`, y después `update_idletasks()`, para que en Debian la copia siga disponible al salir de la ventana.
+- Si la lista se redibuja antes de que pase el segundo del check (por ejemplo, porque llega la verificación), el callback comprueba que el botón siga existiendo.
+
+### Archivos creados o modificados
+
+- `verificador.py`
+- `interfaz.py`
+- `main.py` (pruebas de `clave_url`)
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+Ninguno de ejecución distinto del diseño anterior: programar `after()` desde el hilo de red ya se había descartado en la fase 3, y aquí la cola solo cambia el dato que transporta.
+
+### Pendientes
+
+- Verificación de todos con barra de progreso y cancelar (fase 5).
+- Filtros, búsqueda, categorías editables, notas, CSV y contadores (fase 6).
+- Pulido y notas de PyInstaller (fase 7).
+- Crear la rama `debian` al validar en Linux.

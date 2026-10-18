@@ -151,6 +151,20 @@ def probar_normalizacion(informe: _Comprobaciones) -> None:
         verificador.normalizar_url("//cdn.example.com/x") == "https://cdn.example.com/x",
         "una URL de protocolo relativo recibe https:",
     )
+    informe.comprobar(
+        verificador.clave_url("Example.com") == verificador.clave_url("https://example.com/"),
+        "example.com y https://example.com/ son el mismo enlace",
+    )
+    informe.comprobar(
+        verificador.clave_url("https://example.com/a/")
+        == verificador.clave_url("https://example.com/a#seccion"),
+        "la barra final y el fragmento no crean otro enlace",
+    )
+    informe.comprobar(
+        verificador.clave_url("https://example.com/a?id=1")
+        != verificador.clave_url("https://example.com/a?id=2"),
+        "una query distinta es otro enlace",
+    )
 
     for cruda in ("", "   ", "ftp://example.com/archivo", "https://"):
         estado, codigo, titulo = verificador.verificar_url(cruda)

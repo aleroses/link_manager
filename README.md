@@ -1,6 +1,6 @@
 # Gestor de Enlaces
 
-Aplicación de escritorio para guardar enlaces web, comprobar si responden y abrirlos más tarde en el navegador. La ventana ya permite pegar un enlace, guardarlo y ver su estado. Abrir, copiar y borrar llegan en fases posteriores.
+Aplicación de escritorio para guardar enlaces web, comprobar si responden y abrirlos en el navegador. La ventana permite añadir un enlace, ver su estado, abrirlo, copiar la dirección y eliminarlo.
 
 ## Requisitos
 
@@ -64,6 +64,8 @@ En Debian el comando es el mismo (`python main.py`) después de `source venv/bin
 
 Se abre la ventana "Gestor de Enlaces". Pega una dirección en el campo y pulsa Añadir (o Enter). El enlace aparece al momento como pendiente y, unos segundos después, cambia de color cuando termina la comprobación. La ventana sigue respondiendo mientras tanto.
 
+En cada fila hay tres botones de icono: Abrir (también vale el doble clic sobre el texto), Copiar URL y Eliminar. Abrir lanza el navegador predeterminado y marca el enlace como visitado. Copiar cambia el icono a una marca de verificación durante un segundo. Eliminar pide confirmación. Si pegas el mismo enlace con otra forma (`example.com` y `https://example.com/`), la aplicación avisa y no lo añade otra vez.
+
 Sin activar el entorno:
 
 - Windows: `.\venv\Scripts\python.exe main.py`
@@ -118,8 +120,12 @@ Hasta esta fase:
 - Ventana oscura y redimensionable, con iconos Lucide.
 - Campo de URL y botón Añadir. El enlace se guarda al momento y se verifica en segundo plano, sin congelar la ventana.
 - Lista con un punto de color: verde activo, rojo caído, naranja error, gris pendiente.
+- Abrir el enlace en el navegador predeterminado, con el botón o con doble clic. Al abrirlo queda marcado como visitado.
+- Copiar la URL al portapapeles. El icono del botón pasa a una marca de verificación durante un segundo.
+- Eliminar un enlace, con confirmación.
+- Avisar si el enlace ya está en la lista, aunque cambie el esquema, las mayúsculas, la barra final o el fragmento `#...`.
 
-Todavía no se puede abrir el enlace en el navegador, copiarlo, editarlo ni borrarlo. Tampoco hay buscador, filtros ni barra de progreso.
+Todavía no se pueden editar notas ni categoría. Tampoco hay buscador, filtros ni barra de progreso.
 
 ## Ramas
 
