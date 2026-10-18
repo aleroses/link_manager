@@ -106,3 +106,42 @@ Ninguno. La suite de consola cubre archivo nuevo, ida y vuelta con tildes, ausen
 - Filtros, búsqueda, categorías, CSV y contadores (fase 6).
 - Pulido y notas de PyInstaller (fase 7).
 - Crear la rama `debian` al validar en Linux.
+
+## 2026-10-17 — Fase 3: Ventana base
+
+### Qué se hizo
+
+La aplicación abre una ventana oscura. Se puede pegar una URL, pulsar Añadir y ver el enlace en una lista con un punto de color según su estado. Al añadir, el registro se guarda como pendiente y un hilo llama a `verificar_url`. El hilo principal recoge el resultado con `after()`, actualiza la fila y vuelve a guardar. `python main.py` abre la ventana. `python main.py --probar` conserva las pruebas de consola.
+
+Los iconos de Lucide 0.469.0 (licencia ISC) están en `assets/icons/`: el SVG original y un PNG a 20 px y otro a 40 px. La interfaz carga el de 40 px con `CTkImage` a tamaño 20, para que una pantalla HiDPI tenga píxeles de sobra.
+
+### Decisiones técnicas y por qué
+
+- La ventana vive en `interfaz.py`. `main.py` solo elige entre la ventana y las pruebas, para no mezclar Tk con el bloque de consola.
+- Paleta fija en el código: fondo `#14171C`, barras `#1C2128`, filas `#242A33`, un solo acento `#4C8DFF`. Los estados son verde `#3DDC97`, rojo `#E85D4C`, naranja `#E8A04C` y gris `#8B9098`. El nombre del estado acompaña al punto para que el color no sea la única pista.
+- Se fijó Lucide 0.469.0 porque en `main` ya no existen `trash-2` ni `filter`, y en esa etiqueta sí están, junto con `triangle-alert`.
+- Pillow no rasteriza SVG. Los PNG se generaron una vez en el desarrollo (trazo claro `#E7E5E4` sobre fondo transparente) y quedan en el repositorio. Quien clone el proyecto no necesita Cairo ni Inkscape, ni en Windows ni en Debian.
+- Si falta un PNG de 40 px, la aplicación muestra el nombre del archivo y no construye la lista a medias.
+- La verificación al añadir no espera en el hilo de la interfaz. El hilo de red solo deposita el resultado en una cola. Un `after()` del hilo principal lo escribe en la fila. Llamar a `after()` desde el otro hilo no es fiable: Tk responde que el hilo principal no está en su bucle y el estado se quedaría en pendiente. "Verificar todos", la barra de progreso y la cancelación siguen siendo la fase 5. Abrir, copiar, editar, borrar y los duplicados siguen siendo la fase 4: los iconos ya están guardados, pero esos botones no se muestran todavía.
+- Una URL vacía o que no sea http/https no se guarda. El aviso queda en la barra superior.
+- El bloque de PowerShell (directiva solo de esa ventana, o llamar a `python.exe` sin activar) está en la instalación de Windows. El fallo ocurre al activar el entorno, antes de llegar a "Problemas comunes".
+
+### Archivos creados o modificados
+
+- `assets/icons/*.svg`, `assets/icons/*-20.png`, `assets/icons/*-40.png`
+- `interfaz.py`
+- `main.py`
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+`renderPM` de ReportLab, usado solo para fabricar los PNG, pasó a depender de cairocffi en cuanto esa librería estuvo instalada, y cairocffi no encontraba la DLL de Cairo. Se desinstaló cairocffi para que el render usara pycairo, se generaron los PNG y después se quitaron esas herramientas del entorno. No forman parte de `requirements.txt`.
+
+### Pendientes
+
+- Abrir enlaces con `webbrowser`, copiar, borrar y duplicados (fase 4).
+- Verificación de todos con barra de progreso y cancelar (fase 5).
+- Filtros, búsqueda, categorías editables, CSV y contadores (fase 6).
+- Pulido y notas de PyInstaller (fase 7).
+- Crear la rama `debian` al validar en Linux.

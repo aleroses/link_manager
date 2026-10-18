@@ -1,8 +1,7 @@
-"""Pruebas de consola de la persistencia y del verificador.
+"""Punto de entrada del Gestor de Enlaces.
 
-Hasta que exista la ventana, ejecutar este archivo comprueba que los
-datos se guardan bien y que la clasificación de enlaces responde.
-No abre interfaz gráfica.
+Sin argumentos abre la ventana. Con --probar ejecuta las pruebas de
+consola de la persistencia y del verificador.
 """
 
 from __future__ import annotations
@@ -237,4 +236,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    if "--probar" in sys.argv:
+        sys.exit(main())
+    from interfaz import iniciar
+
+    iniciar()

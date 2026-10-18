@@ -1,6 +1,6 @@
 # Gestor de Enlaces
 
-Aplicación de escritorio para guardar enlaces web, comprobar si responden y abrirlos más tarde en el navegador. La ventana gráfica todavía no está construida. En este punto el proyecto incluye la persistencia en JSON y el verificador de URLs, y se comprueban los dos con pruebas de consola.
+Aplicación de escritorio para guardar enlaces web, comprobar si responden y abrirlos más tarde en el navegador. La ventana ya permite pegar un enlace, guardarlo y ver su estado. Abrir, copiar y borrar llegan en fases posteriores.
 
 ## Requisitos
 
@@ -8,13 +8,13 @@ Aplicación de escritorio para guardar enlaces web, comprobar si responden y abr
 - Conexión a internet para las pruebas de red del verificador.
 - En Debian, paquetes del sistema: `python3`, `python3-venv`, `python3-pip` y `python3-tk`.
 
-`python3-tk` hace falta para la ventana (fases posteriores). Conviene instalarlo ya para que el entorno quede completo.
+`python3-tk` hace falta para abrir la ventana. CustomTkinter se apoya en Tk, que no viene dentro de `pip`.
 
 Las dependencias de Python van con versión fijada en `requirements.txt`:
 
-- `customtkinter==6.0.0` (interfaz; aún no se usa)
+- `customtkinter==6.0.0` (ventana)
 - `requests==2.34.2` (verificación de enlaces)
-- `pillow==12.3.0` (iconos; aún no se usa)
+- `pillow==12.3.0` (iconos)
 
 Pillow 13 exige Python 3.11. La versión 12.3.0 mantiene el soporte de Python 3.10.
 
@@ -29,6 +29,19 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+Si PowerShell rechaza `Activate.ps1` por la directiva de ejecución, usa una de estas dos opciones:
+
+```powershell
+# Opción A: permitir scripts solo en esta ventana, luego activar
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\venv\Scripts\Activate.ps1
+
+# Opción B: no activar nada y llamar directo al Python del entorno
+.\venv\Scripts\python.exe main.py
+```
+
+La opción A solo afecta a esa ventana. Después de activar, `python main.py` abre la aplicación. La opción B abre la aplicación sin activar el entorno.
+
 ## Instalación en Debian (bash)
 
 ```bash
@@ -39,7 +52,7 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## Ejecutar las pruebas
+## Ejecutar la aplicación
 
 Con el entorno virtual activado, en la carpeta del proyecto:
 
@@ -49,29 +62,36 @@ python main.py
 
 En Debian el comando es el mismo (`python main.py`) después de `source venv/bin/activate`.
 
-El programa no abre una ventana. Escribe en la consola líneas `OK` o `FALLO` y termina con un resumen. El código de salida es 0 solo cuando todas las pruebas pasan.
+Se abre la ventana "Gestor de Enlaces". Pega una dirección en el campo y pulsa Añadir (o Enter). El enlace aparece al momento como pendiente y, unos segundos después, cambia de color cuando termina la comprobación. La ventana sigue respondiendo mientras tanto.
 
-Sin activar el entorno también puedes usar el intérprete del virtualenv:
+Sin activar el entorno:
 
 - Windows: `.\venv\Scripts\python.exe main.py`
 - Debian: `./venv/bin/python main.py`
+
+## Ejecutar las pruebas de consola
+
+```powershell
+python main.py --probar
+```
+
+En Debian, el mismo comando con el entorno activado. Escribe líneas `OK` o `FALLO` y termina con un resumen. El código de salida es 0 solo cuando todas las pruebas pasan. No abre la ventana. Las tres pruebas de red necesitan internet.
 
 ## Estructura del proyecto
 
 ```text
 link_manager/
-  main.py             Pruebas de consola (punto de entrada provisional)
+  main.py             Abre la ventana; con --probar lanza las pruebas
+  interfaz.py         Ventana oscura, campo de URL y lista
   datos.py            Carga y guardado de enlaces.json
   verificador.py      Normalización de URL y comprobación HTTP
   requirements.txt    Dependencias con versión fijada
   README.md           Esta guía
   DOCUMENTACION.md    Diario de decisiones por fase
   .gitignore
-  assets/icons/       Reservada para los iconos (fase 3)
+  assets/icons/       SVG Lucide y PNG a 20 px y 40 px
   venv/               Entorno local; no se versiona
 ```
-
-Cuando la interfaz crezca, la ventana irá en `interfaz.py` y `main.py` pasará a abrirla.
 
 ## Dónde se guardan los enlaces
 
@@ -80,7 +100,7 @@ Cuando la interfaz crezca, la ventana irá en `interfaz.py` y `main.py` pasará 
 - Windows: `%APPDATA%\GestorDeEnlaces\enlaces.json`
 - Debian: `$XDG_CONFIG_HOME/gestor-de-enlaces/enlaces.json`, o `~/.config/gestor-de-enlaces/enlaces.json`
 
-Las pruebas de `main.py` usan una carpeta temporal y no crean `enlaces.json` en el proyecto.
+Al abrir la ventana, si todavía no existe el archivo, se crea `enlaces.json` vacío. Las pruebas de `python main.py --probar` usan una carpeta temporal y no escriben ese archivo en el proyecto.
 
 Cada enlace tendrá: `url`, `titulo`, `estado`, `codigo_http`, `visitado`, `categoria`, `notas`, `fecha_añadido`, `ultima_verificacion`.
 
@@ -95,8 +115,11 @@ Hasta esta fase:
 - Escritura atómica: se escribe un temporal y después se renombra.
 - Normalizar una URL (se antepone `https://` si falta el esquema).
 - Verificar una URL con tiempo límite de 8 segundos: primero HEAD y, si falla, GET. El título se lee del HTML cuando la petición es GET.
+- Ventana oscura y redimensionable, con iconos Lucide.
+- Campo de URL y botón Añadir. El enlace se guarda al momento y se verifica en segundo plano, sin congelar la ventana.
+- Lista con un punto de color: verde activo, rojo caído, naranja error, gris pendiente.
 
-Todavía no hay ventana, botones, filtros ni apertura en el navegador.
+Todavía no se puede abrir el enlace en el navegador, copiarlo, editarlo ni borrarlo. Tampoco hay buscador, filtros ni barra de progreso.
 
 ## Ramas
 
@@ -114,19 +137,14 @@ git checkout windows
 
 ## Problemas comunes
 
-**PowerShell no deja activar el entorno.** El mensaje habla de la directiva de ejecución. En esa ventana:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\venv\Scripts\Activate.ps1
-```
-
-Eso solo afecta a la ventana actual. Si prefieres no cambiar la directiva, ejecuta `.\venv\Scripts\python.exe main.py`.
+**PowerShell no deja activar el entorno.** Usa la opción A o la opción B de la sección "Instalación en Windows".
 
 **`python3 -m venv` falla en Debian.** Falta el paquete `python3-venv`. Instálalo con el comando `apt` de la sección de Debian y vuelve a crear el entorno.
 
-**La ventana futura no arranca en Debian.** Falta `python3-tk`. CustomTkinter se apoya en Tk, que no viene dentro de `pip`.
+**La ventana no arranca en Debian.** Falta `python3-tk`. CustomTkinter se apoya en Tk, que no viene dentro de `pip`.
 
-**Las pruebas de "Red" salen FALLO y el resto OK.** Esas tres necesitan internet y que `example.com` responda. Revisa la conexión y vuelve a lanzar `python main.py`. Un dominio `.invalid` debe quedar como `caído`; si una red corporativa responde por él, esa prueba concreta puede fallar.
+**La ventana dice que faltan iconos.** Tiene que existir cada `nombre-40.png` dentro de `assets/icons/`. No borres esa carpeta.
+
+**Las pruebas de "Red" salen FALLO y el resto OK.** Esas tres necesitan internet y que `example.com` responda. Revisa la conexión y vuelve a lanzar `python main.py --probar`. Un dominio `.invalid` debe quedar como `caído`; si una red corporativa responde por él, esa prueba concreta puede fallar.
 
 **Aparece un archivo `.bak`.** El JSON no se pudo leer. La copia conserva el contenido anterior. El archivo de trabajo se reescribe como lista vacía para que el programa pueda seguir. No borres el `.bak` hasta recuperar lo que te interese.
