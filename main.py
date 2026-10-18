@@ -102,27 +102,33 @@ def probar_persistencia(informe: _Comprobaciones) -> None:
         base = Path(carpeta)
         ruta = base / "enlaces.json"
 
+        vacio = datos.coleccion_vacia()
         cargados = datos.cargar_enlaces(ruta)
         texto = ruta.read_text(encoding="utf-8")
         informe.comprobar(
-            cargados == [] and json.loads(texto) == [],
+            cargados == vacio and json.loads(texto) == vacio,
             "crear enlaces.json vacío si no existe",
         )
 
+        coleccion = datos.coleccion_vacia()
         enlace = datos.enlace_nuevo("https://example.com/cañón")
         enlace["notas"] = "revisar después"
         enlace["estado"] = "caído"
         enlace["categoria"] = "lectura"
-        datos.guardar_enlaces([enlace], ruta)
+        coleccion["enlaces"].append(enlace)
+        datos.guardar_enlaces(coleccion, ruta)
         recuperado = datos.cargar_enlaces(ruta)
+        guardado = recuperado["enlaces"][0]
         informe.comprobar(
-            len(recuperado) == 1
-            and recuperado[0]["url"] == "https://example.com/cañón"
-            and recuperado[0]["notas"] == "revisar después"
-            and recuperado[0]["estado"] == "caído"
-            and recuperado[0]["visitado"] is False
-            and recuperado[0]["categoria"] == "lectura"
-            and recuperado[0]["codigo_http"] is None,
+            recuperado["version"] == 2
+            and recuperado["categorias"] == []
+            and len(recuperado["enlaces"]) == 1
+            and guardado["url"] == "https://example.com/cañón"
+            and guardado["notas"] == "revisar después"
+            and guardado["estado"] == "caído"
+            and guardado["visitado"] is False
+            and guardado["categoria"] == "lectura"
+            and guardado["codigo_http"] is None,
             "guardar y volver a cargar conserva tildes y campos",
         )
         informe.comprobar(
@@ -135,10 +141,10 @@ def probar_persistencia(informe: _Comprobaciones) -> None:
         tras_corrupto = datos.cargar_enlaces(ruta)
         respaldo = ruta.with_name(ruta.name + ".bak")
         informe.comprobar(
-            tras_corrupto == []
+            tras_corrupto == datos.coleccion_vacia()
             and respaldo.is_file()
             and respaldo.read_text(encoding="utf-8") == original
-            and json.loads(ruta.read_text(encoding="utf-8")) == []
+            and json.loads(ruta.read_text(encoding="utf-8")) == datos.coleccion_vacia()
             and not list(base.glob("*.tmp")),
             "un JSON corrupto se copia a .bak y el archivo queda vacío",
         )
@@ -149,6 +155,18 @@ def probar_persistencia(informe: _Comprobaciones) -> None:
         informe.comprobar(
             len(copias) == 2 and respaldo.read_text(encoding="utf-8") == original,
             "un segundo archivo corrupto no pisa el .bak anterior",
+        )
+
+        lista_antigua = '[{"url": "https://example.com"}]'
+        ruta.write_text(lista_antigua, encoding="utf-8")
+        tras_lista = datos.cargar_enlaces(ruta)
+        informe.comprobar(
+            tras_lista == datos.coleccion_vacia()
+            and any(
+                copia.read_text(encoding="utf-8") == lista_antigua
+                for copia in base.glob("*.bak")
+            ),
+            "una lista antigua se copia a .bak y el archivo queda vacío",
         )
 
         informe.comprobar(
@@ -165,6 +183,61 @@ def probar_persistencia(informe: _Comprobaciones) -> None:
             elegida == config / "enlaces.json" and config.is_dir(),
             "si la ruta no es escribible, se usa la carpeta de configuración",
         )
+
+
+def probar_categorias(informe: _Comprobaciones) -> None:
+    coleccion = datos.coleccion_vacia()
+    datos.crear_categoria(coleccion, "Peliculas")
+    datos.crear_categoria(coleccion, "Lectura")
+    fecha = coleccion["categorias"][0]["fecha_creacion"]
+    rechazados: list[str] = []
+    for nombre in ("", "   ", "peliculas", "Sin categoría", "Todas", "Nueva categoría"):
+        try:
+            datos.crear_categoria(coleccion, nombre)
+        except datos.ErrorCategoria:
+            rechazados.append(nombre)
+    informe.comprobar(
+        rechazados == ["", "   ", "peliculas", "Sin categoría", "Todas", "Nueva categoría"]
+        and len(coleccion["categorias"]) == 2,
+        "un nombre vacío, repetido o reservado no crea categoría",
+    )
+    informe.comprobar(
+        datos.asegurar_categoria(coleccion, "LECTURA") == "Lectura"
+        and datos.asegurar_categoria(coleccion, "Cine") == "Cine"
+        and [item["nombre"] for item in coleccion["categorias"]] == ["Peliculas", "Lectura", "Cine"],
+        "asegurar reutiliza la grafía guardada y crea la que falta",
+    )
+
+    peliculas = datos.enlace_nuevo("https://example.com/p")
+    peliculas["categoria"] = "Peliculas"
+    lectura = datos.enlace_nuevo("https://example.com/l")
+    lectura["categoria"] = "Lectura"
+    suelto = datos.enlace_nuevo("https://example.com/s")
+    coleccion["enlaces"] = [peliculas, lectura, suelto]
+    datos.renombrar_categoria(coleccion, "peliculas", "Filmes")
+    informe.comprobar(
+        coleccion["categorias"][0]["nombre"] == "Filmes"
+        and coleccion["categorias"][0]["fecha_creacion"] == fecha
+        and peliculas["categoria"] == "Filmes"
+        and lectura["categoria"] == "Lectura",
+        "renombrar cambia la ficha y los enlaces, y conserva la fecha",
+    )
+    datos.eliminar_categoria(coleccion, "Filmes", borrar_enlaces=False)
+    informe.comprobar(
+        peliculas["categoria"] == ""
+        and lectura in coleccion["enlaces"]
+        and suelto in coleccion["enlaces"]
+        and [item["nombre"] for item in coleccion["categorias"]] == ["Lectura", "Cine"],
+        "eliminar una categoría mueve sus enlaces a Sin categoría",
+    )
+    datos.eliminar_categoria(coleccion, "lectura", True)
+    informe.comprobar(
+        lectura not in coleccion["enlaces"]
+        and peliculas in coleccion["enlaces"]
+        and suelto in coleccion["enlaces"]
+        and [item["nombre"] for item in coleccion["categorias"]] == ["Cine"],
+        "eliminar una categoría puede borrar también sus enlaces",
+    )
 
 
 def probar_csv(informe: _Comprobaciones) -> None:
@@ -416,6 +489,8 @@ def main() -> int:
     informe = _Comprobaciones()
     print("Persistencia")
     probar_persistencia(informe)
+    print("Categorías")
+    probar_categorias(informe)
     print("CSV")
     probar_csv(informe)
     print("Normalización")

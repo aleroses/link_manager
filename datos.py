@@ -1,8 +1,9 @@
-"""Persistencia de los enlaces en un archivo JSON.
+"""Persistencia de categorías y enlaces en un archivo JSON.
 
 El archivo vive junto a este módulo cuando la carpeta se puede escribir.
 Si el script está en una ruta de solo lectura, se usa la carpeta de
-configuración del usuario.
+configuración del usuario. El documento es un objeto con version 2,
+categorias y enlaces.
 """
 
 from __future__ import annotations
@@ -16,7 +17,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 NOMBRE_ARCHIVO = "enlaces.json"
+VERSION_DATOS = 2
 _SONDA = ".sonda_escritura"
+# Etiquetas de la ventana. No pueden usarse como nombre de categoría.
+NOMBRES_RESERVADOS = {"sin categoría", "todas", "nueva categoría"}
 
 
 def directorio_escribible(ruta: Path) -> bool:
@@ -133,6 +137,125 @@ def resolver_edicion_titulo(
     return None
 
 
+class ErrorCategoria(ValueError):
+    """El nombre de la categoría no se puede usar."""
+
+
+def coleccion_vacia() -> dict:
+    """Documento nuevo: sin categorías y sin enlaces."""
+    return {"version": VERSION_DATOS, "categorias": [], "enlaces": []}
+
+
+def _documento_valido(datos: object) -> bool:
+    if not isinstance(datos, dict):
+        return False
+    if datos.get("version") != VERSION_DATOS:
+        return False
+    return isinstance(datos.get("categorias"), list) and isinstance(datos.get("enlaces"), list)
+
+
+def _clave_categoria(nombre: str) -> str:
+    return nombre.strip().casefold()
+
+
+def buscar_categoria(coleccion: dict, nombre: str) -> dict | None:
+    """Ficha cuyo nombre coincide sin distinguir mayúsculas."""
+    clave = _clave_categoria(nombre)
+    if not clave:
+        return None
+    for categoria in coleccion.get("categorias") or []:
+        if not isinstance(categoria, dict):
+            continue
+        if _clave_categoria(str(categoria.get("nombre") or "")) == clave:
+            return categoria
+    return None
+
+
+def crear_categoria(coleccion: dict, nombre: str) -> dict:
+    """Añade una categoría. Rechaza vacío, reservado o repetido."""
+    texto = nombre.strip()
+    if not texto:
+        raise ErrorCategoria("El nombre está vacío.")
+    if texto.casefold() in NOMBRES_RESERVADOS:
+        raise ErrorCategoria("Ese nombre está reservado.")
+    if buscar_categoria(coleccion, texto) is not None:
+        raise ErrorCategoria("Ya hay una categoría con ese nombre.")
+    categoria = {
+        "nombre": texto,
+        "fecha_creacion": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    coleccion["categorias"].append(categoria)
+    return categoria
+
+
+def renombrar_categoria(coleccion: dict, anterior: str, nuevo: str) -> None:
+    """Cambia el nombre de la ficha y de los enlaces que la usan."""
+    ficha = buscar_categoria(coleccion, anterior)
+    if ficha is None:
+        raise ErrorCategoria("Esa categoría ya no está.")
+    texto = nuevo.strip()
+    if not texto:
+        raise ErrorCategoria("El nombre está vacío.")
+    if texto.casefold() in NOMBRES_RESERVADOS:
+        raise ErrorCategoria("Ese nombre está reservado.")
+    otra = buscar_categoria(coleccion, texto)
+    if otra is not None and otra is not ficha:
+        raise ErrorCategoria("Ya hay una categoría con ese nombre.")
+    clave = _clave_categoria(str(ficha.get("nombre") or ""))
+    ficha["nombre"] = texto
+    for enlace in coleccion.get("enlaces") or []:
+        if not isinstance(enlace, dict):
+            continue
+        if _clave_categoria(str(enlace.get("categoria") or "")) == clave:
+            enlace["categoria"] = texto
+
+
+def eliminar_categoria(coleccion: dict, nombre: str, borrar_enlaces: bool) -> None:
+    """Quita la categoría. Los enlaces se mueven a Sin categoría o se borran."""
+    ficha = buscar_categoria(coleccion, nombre)
+    if ficha is None:
+        raise ErrorCategoria("Esa categoría ya no está.")
+    clave = _clave_categoria(str(ficha.get("nombre") or ""))
+    coleccion["categorias"] = [
+        item
+        for item in coleccion.get("categorias") or []
+        if not (
+            isinstance(item, dict)
+            and _clave_categoria(str(item.get("nombre") or "")) == clave
+        )
+    ]
+    if borrar_enlaces:
+        coleccion["enlaces"] = [
+            enlace
+            for enlace in coleccion.get("enlaces") or []
+            if not (
+                isinstance(enlace, dict)
+                and _clave_categoria(str(enlace.get("categoria") or "")) == clave
+            )
+        ]
+        return
+    for enlace in coleccion.get("enlaces") or []:
+        if not isinstance(enlace, dict):
+            continue
+        if _clave_categoria(str(enlace.get("categoria") or "")) == clave:
+            enlace["categoria"] = ""
+
+
+def asegurar_categoria(coleccion: dict, nombre: str) -> str:
+    """Devuelve el nombre ya guardado. Crea la ficha si todavía no existe.
+
+    Un nombre vacío o reservado queda como Sin categoría y no crea ficha.
+    """
+    texto = nombre.strip()
+    if not texto or texto.casefold() in NOMBRES_RESERVADOS:
+        return ""
+    existente = buscar_categoria(coleccion, texto)
+    if existente is not None:
+        return str(existente.get("nombre") or texto)
+    crear_categoria(coleccion, texto)
+    return texto
+
+
 def _ruta_respaldo(ruta: Path) -> Path:
     """enlaces.json.bak, o un nombre con marca de tiempo si ese ya existe."""
     candidato = ruta.with_name(ruta.name + ".bak")
@@ -153,40 +276,42 @@ def _respaldar(ruta: Path) -> bool:
     return True
 
 
-def cargar_enlaces(ruta: Path | None = None) -> list:
-    """Lee la lista de enlaces.
+def cargar_enlaces(ruta: Path | None = None) -> dict:
+    """Lee el documento de categorías y enlaces.
 
-    Si el archivo no existe, lo crea vacío. Si el JSON no se puede leer
-    o no es una lista, guarda una copia .bak y deja el archivo en [].
+    Si el archivo no existe, lo crea vacío. Si el JSON no se puede leer,
+    es una lista antigua o no es un documento version 2, guarda una
+    copia .bak y deja el archivo en el documento vacío.
     """
     if ruta is None:
         ruta = ruta_datos()
     if not ruta.exists():
-        guardar_enlaces([], ruta)
-        return []
+        vacio = coleccion_vacia()
+        guardar_enlaces(vacio, ruta)
+        return vacio
 
     try:
         texto = ruta.read_text(encoding="utf-8")
     except (OSError, UnicodeError):
         if _respaldar(ruta):
-            guardar_enlaces([], ruta)
-        return []
+            guardar_enlaces(coleccion_vacia(), ruta)
+        return coleccion_vacia()
 
     try:
         if not texto.strip():
             raise ValueError("archivo vacío")
         datos = json.loads(texto)
-        if not isinstance(datos, list):
-            raise ValueError("el contenido no es una lista")
+        if not _documento_valido(datos):
+            raise ValueError("el contenido no es un documento version 2")
     except (json.JSONDecodeError, ValueError):
         if _respaldar(ruta):
-            guardar_enlaces([], ruta)
-        return []
+            guardar_enlaces(coleccion_vacia(), ruta)
+        return coleccion_vacia()
     return datos
 
 
-def guardar_enlaces(enlaces: list, ruta: Path | None = None) -> None:
-    """Escribe la lista de forma atómica: temporal y después renombre.
+def guardar_enlaces(coleccion: dict, ruta: Path | None = None) -> None:
+    """Escribe el documento de forma atómica: temporal y después renombre.
 
     Si el renombre falla, se borra el temporal para no dejar basura.
     """
@@ -194,7 +319,7 @@ def guardar_enlaces(enlaces: list, ruta: Path | None = None) -> None:
         ruta = ruta_datos()
     ruta.parent.mkdir(parents=True, exist_ok=True)
     temporal = ruta.with_name(ruta.name + ".tmp")
-    contenido = json.dumps(enlaces, ensure_ascii=False, indent=2) + "\n"
+    contenido = json.dumps(coleccion, ensure_ascii=False, indent=2) + "\n"
     try:
         temporal.write_text(contenido, encoding="utf-8")
         temporal.replace(ruta)

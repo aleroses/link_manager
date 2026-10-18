@@ -62,13 +62,15 @@ python main.py
 
 En Debian el comando es el mismo (`python main.py`) después de `source venv/bin/activate`.
 
-Se abre la ventana "Gestor de Enlaces". Pega una dirección en el campo y pulsa Añadir (o Enter). El enlace aparece al momento como pendiente y, unos segundos después, cambia de color cuando termina la comprobación. La ventana sigue respondiendo mientras tanto.
+Se abre la ventana "Gestor de Enlaces" en la vista de categorías. Cada tarjeta muestra el nombre, cuántos enlaces tiene y el recuento de estados. La primera es Sin categoría. Un control arriba alterna con Todos los enlaces, que es la lista completa. Al pulsar una tarjeta se ven sus enlaces y empieza su comprobación. Pega una dirección en el campo y pulsa Añadir (o Enter). Dentro de una categoría, el enlace nuevo queda en ella. Desde las tarjetas o desde Todos los enlaces, queda en Sin categoría. El enlace aparece al momento como pendiente y, unos segundos después, cambia de color cuando termina la comprobación. La ventana sigue respondiendo mientras tanto.
 
-En cada fila hay cuatro botones de icono: Editar, Abrir (también vale el doble clic sobre el texto), Copiar URL y Eliminar. Editar cambia el título, la categoría y las notas. Obtener título de nuevo vuelve a leer el título de la página. Abrir lanza el navegador predeterminado y marca el enlace como visitado. Copiar cambia el icono a una marca de verificación durante un segundo. Eliminar pide confirmación. Si pegas el mismo enlace con otra forma (`example.com` y `https://example.com/`), la aplicación avisa y no lo añade otra vez. Si pegas varias líneas, cada línea es un enlace: las vacías se saltan, las que no son http o https se cuentan y las repetidas no se guardan.
+En cada fila hay cuatro botones de icono: Editar, Abrir (también vale el doble clic sobre el texto), Copiar URL y Eliminar. Editar cambia el título, la categoría y las notas. La categoría se elige en un menú, y desde ahí también se puede crear una nueva. Obtener título de nuevo vuelve a leer el título de la página. Abrir lanza el navegador predeterminado y marca el enlace como visitado. Copiar cambia el icono a una marca de verificación durante un segundo. Eliminar pide confirmación. Si pegas el mismo enlace con otra forma (`example.com` y `https://example.com/`), la aplicación avisa y no lo añade otra vez. Si pegas varias líneas, cada línea es un enlace: las vacías se saltan, las que no son http o https se cuentan y las repetidas no se guardan.
 
 El botón Verificar todos comprueba la lista entera, también los enlaces que el filtro oculta. Aparecen una barra, el texto "8 de 25 (32%)" y el botón Cancelar. Como máximo hay 8 comprobaciones a la vez, y se puede seguir usando la ventana. Cancelar no corta lo que ya salió a la red: eso termina y se anota. El resto no se inicia.
 
-Debajo hay un buscador y dos menús. El buscador mira título, URL, notas y categoría en cada tecla, sin distinguir mayúsculas. El primer menú deja ver todos, un estado (pendiente, activo, error o caído) o si el enlace está visitado. El segundo filtra por categoría: Todas, Sin categoría o una de las que ya hay. Las tres condiciones se aplican a la vez. La barra inferior cuenta toda la colección, por ejemplo "12 activos, 3 caídos, 2 errores, 5 pendientes". Ahí también están Importar, Exportar y Reintentar caídos. Exportar escribe un CSV con todos los enlaces, no solo los que se ven. Importar añade los nuevos y conserva los que ya estaban. El formato del archivo está en la sección "Formato del CSV".
+En la vista de tarjetas, Nueva categoría pide un nombre. Uno vacío, repetido o igual a Sin categoría, Todas o Nueva categoría no se guarda. Cada tarjeta tiene botones de icono: Abrir todos, Verificar categoría, Renombrar y Eliminar. Sin categoría no se renombra ni se elimina. Abrir todos pide confirmación si hay más de 5 enlaces, y marca como visitados los que el navegador abre. Verificar categoría comprueba solo esos enlaces. Eliminar pregunta si los enlaces pasan a Sin categoría, que es la opción marcada al abrir, o si se borran también.
+
+En Todos los enlaces, y también dentro de una categoría, hay un buscador y menús. El buscador mira título, URL, notas y categoría en cada tecla, sin distinguir mayúsculas. El primer menú deja ver todos, un estado (pendiente, activo, error o caído) o si el enlace está visitado. En Todos los enlaces, el segundo filtra por categoría: Todas, Sin categoría o una de las guardadas, aunque todavía no tenga enlaces. Dentro de una categoría ese menú no aparece, porque la sección ya la eligió, y un botón vuelve a las tarjetas. La barra inferior cuenta toda la colección, por ejemplo "12 activos, 3 caídos, 2 errores, 5 pendientes". Ahí también están Importar, Exportar y Reintentar caídos. Exportar escribe un CSV con todos los enlaces, no solo los que se ven. Importar añade los nuevos, conserva los que ya estaban y crea las categorías que falten. El formato del archivo está en la sección "Formato del CSV".
 
 Sin activar el entorno:
 
@@ -106,7 +108,13 @@ link_manager/
 - Windows: `%APPDATA%\GestorDeEnlaces\enlaces.json`
 - Debian: `$XDG_CONFIG_HOME/gestor-de-enlaces/enlaces.json`, o `~/.config/gestor-de-enlaces/enlaces.json`
 
-Al abrir la ventana, si todavía no existe el archivo, se crea `enlaces.json` vacío. Las pruebas de `python main.py --probar` usan una carpeta temporal y no escriben ese archivo en el proyecto.
+Al abrir la ventana, si todavía no existe el archivo, se crea un documento vacío:
+
+```json
+{ "version": 2, "categorias": [], "enlaces": [] }
+```
+
+Una categoría guardada tiene `nombre` y `fecha_creacion`. El nombre conserva las mayúsculas con las que se creó. Cada enlace sigue llevando `categoria`: el texto vacío es Sin categoría. Si el archivo no se puede leer, es una lista antigua o no tiene esa forma, se copia a un `.bak` y el archivo de trabajo queda en el documento vacío. Las pruebas de `python main.py --probar` usan una carpeta temporal y no escriben ese archivo en el proyecto.
 
 Cada enlace tendrá: `url`, `titulo`, `titulo_manual`, `estado`, `codigo_http`, `visitado`, `categoria`, `notas`, `fecha_añadido`, `ultima_verificacion`.
 
@@ -127,21 +135,24 @@ Importar y exportar usan las mismas columnas, en UTF-8 con BOM. La única obliga
 - `fecha_añadido`
 - `ultima_verificacion`
 
-Una fila vacía, o con la `url` vacía, se omite. Un `estado` distinto de `pendiente`, `activo`, `error` o `caído` queda en `pendiente` y el enlace se verifica. Un estado conocido se conserva. `visitado` se escribe `si` o `no`; al leer también valen `true`, `false`, `1` y `0`. Un título no vacío, distinto de `Sin título`, se conserva en las verificaciones siguientes. La celda vacía o el texto `Sin título` se sustituye la próxima vez que se comprueba el enlace.
+Una fila vacía, o con la `url` vacía, se omite. Un `estado` distinto de `pendiente`, `activo`, `error` o `caído` queda en `pendiente` y el enlace se verifica. Un estado conocido se conserva. `visitado` se escribe `si` o `no`; al leer también valen `true`, `false`, `1` y `0`. Un título no vacío, distinto de `Sin título`, se conserva en las verificaciones siguientes. La celda vacía o el texto `Sin título` se sustituye la próxima vez que se comprueba el enlace. Si `categoria` trae un nombre que todavía no existe, la importación crea esa categoría.
 
 ## Funcionalidades disponibles
 
 Hasta esta fase:
 
 - Crear un registro de enlace con todos los campos.
-- Cargar y guardar la lista en JSON. Si el archivo no existe, se crea vacío. Si está corrupto, se copia a un `.bak` y el archivo de trabajo queda en `[]`.
+- Cargar y guardar el documento version 2 en JSON, con `categorias` y `enlaces`. Si el archivo no existe, se crea vacío. Si está corrupto o es una lista antigua, se copia a un `.bak` y el archivo de trabajo queda en el documento vacío.
 - Escritura atómica: se escribe un temporal y después se renombra.
 - Normalizar una URL (se antepone `https://` si falta el esquema).
 - Verificar una URL con tiempo límite de 8 segundos: primero HEAD y, si falla o el servidor responde 405 o 501, GET. Si HEAD responde y el contenido es HTML, un GET parcial de como máximo 64 KB lee el título y se cierra la conexión. El código HTTP sigue siendo el del HEAD. Si no hay título, se guarda uno descriptivo a partir de la URL.
 - Ventana oscura y redimensionable, con iconos Lucide.
 - Campo de URL y botón Añadir. El enlace se guarda al momento y se verifica en segundo plano, sin congelar la ventana.
 - Lista con un punto de color: verde activo, rojo caído, naranja error, gris pendiente. Si hay notas, se ve la primera línea.
-- Editar el título, la categoría y las notas de un enlace. Obtener título de nuevo rellena el título desde la página. Un título escrito a mano se conserva al verificar. `Sin título`, si quedó guardado de antes, se sustituye en la siguiente comprobación.
+- Editar el título, la categoría y las notas de un enlace. La categoría sale de un menú y se puede crear una nueva al guardar. Obtener título de nuevo rellena el título desde la página. Un título escrito a mano se conserva al verificar. `Sin título`, si quedó guardado de antes, se sustituye en la siguiente comprobación.
+- Ver las categorías como tarjetas, entrar en una y volver. Al entrar se comprueban sus enlaces con la misma barra y el mismo tope de 8 hilos.
+- Crear, renombrar y eliminar categorías. Al eliminar, los enlaces pueden pasar a Sin categoría o borrarse con ella.
+- Abrir todos los enlaces de una categoría. Con más de 5, pide confirmación. Los que se abren quedan visitados.
 - Abrir el enlace en el navegador predeterminado, con el botón o con doble clic. Al abrirlo queda marcado como visitado.
 - Copiar la URL al portapapeles. El icono del botón pasa a una marca de verificación durante un segundo.
 - Eliminar un enlace, con confirmación.
@@ -153,7 +164,7 @@ Hasta esta fase:
 - Filtrar por estado y, a la vez, por categoría (Todas, Sin categoría o una de las guardadas).
 - Resumen fijo de toda la colección: "12 activos, 3 caídos, 2 errores, 5 pendientes".
 - Reintentar caídos, con el mismo tope de 8 comprobaciones y la misma barra de progreso.
-- Importar y exportar CSV. Exportar incluye toda la colección. Importar añade los nuevos y se salta los repetidos.
+- Importar y exportar CSV. Exportar incluye toda la colección. Importar añade los nuevos, se salta los repetidos y crea las categorías que falten.
 
 ## Ramas
 

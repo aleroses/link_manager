@@ -309,3 +309,39 @@ Ninguno de ejecución. `python main.py --probar` terminó con 37 pruebas correct
 
 - Resto del pulido y notas de PyInstaller (fase 7).
 - Crear la rama `debian` al validar en Linux.
+
+## 2026-10-18 — Fase 7B: Categorías como secciones
+
+### Qué se hizo
+
+`enlaces.json` pasa a ser un documento version 2 con `categorias` y `enlaces`. La pantalla abre en tarjetas. Un control alterna con la lista de todos los enlaces. Cada tarjeta muestra el nombre, la cantidad y el recuento de estados, y permite abrir todos, verificar, renombrar y eliminar. Sin categoría es fija. Al entrar en una tarjeta se ven sus enlaces, con las acciones de siempre, y se comprueban en segundo plano. Importar un CSV crea las categorías que falten. El diálogo Editar elige la categoría en un menú.
+
+### Decisiones técnicas y por qué
+
+- Sigue habiendo un solo archivo. No se crea `categorias.json`. Una ficha guarda `nombre` y `fecha_creacion`. El enlace conserva `categoria` como texto, y el vacío significa Sin categoría.
+- No hay migración. Una lista antigua, un JSON ilegible o un objeto que no sea version 2 se copia a `.bak` y el archivo de trabajo queda vacío. Los datos que había eran de prueba.
+- Crear, renombrar, eliminar y asegurar viven en `datos.py`, así las pruebas no abren Tk. Los nombres se comparan sin distinguir mayúsculas. `Sin categoría`, `Todas` y `Nueva categoría` están reservados porque son etiquetas de la ventana. Renombrar conserva la fecha y actualiza los enlaces.
+- Eliminar ofrece dos caminos. El marcado al abrir mueve los enlaces a Sin categoría. El otro los borra. El resto de la colección no cambia.
+- La vista de tarjetas y la de todos los enlaces comparten el marco con scroll, la barra de progreso y el grupo de 8 hilos. Entrar en una categoría llama a la misma verificación masiva, solo con esos enlaces. Si ya hay una tanda en curso, no se inicia otra. Una sección vacía no lanza la tanda.
+- Añadir desde dentro de una categoría deja el enlace en ella. Desde las tarjetas o desde Todos los enlaces queda en Sin categoría.
+- Abrir todos reutiliza la apertura de un enlace. A partir de 6 pide confirmación. Se guarda una vez, al terminar, y solo quedan visitados los que el navegador llegó a abrir.
+- El CSV no gana columnas. `asegurar_categoria` crea la ficha que falte y, si el nombre ya existe con otra grafía, el enlace usa la que ya estaba guardada.
+- Los iconos nuevos son Lucide 0.469.0: `folder`, `folder-plus`, `arrow-left`, `layout-grid` y `list`, en SVG y en PNG a 20 y 40 px. La herramienta que los rasterizó no forma parte de `requirements.txt`.
+
+### Archivos creados o modificados
+
+- `datos.py`
+- `interfaz.py`
+- `main.py`
+- `assets/icons/folder.svg`, `folder-plus.svg`, `arrow-left.svg`, `layout-grid.svg`, `list.svg` y sus PNG
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+Ninguno de ejecución. `python main.py --probar` terminó con 43 pruebas correctas y 0 fallos: documento version 2, lista antigua archivada en `.bak`, rechazo de nombres, renombre y los dos modos de borrado. La ventana, abierta aparte, mostró las tarjetas, la sección con el botón de volver y el menú de categoría del diálogo Editar.
+
+### Pendientes
+
+- Resto del pulido y notas de PyInstaller (fase 7).
+- Crear la rama `debian` al validar en Linux.

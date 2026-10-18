@@ -27,6 +27,8 @@ import verificador
 HILOS_VERIFICACION = 8
 # La barra se queda un momento en el valor final para que se pueda leer.
 PAUSA_CIERRE_PROGRESO_MS = 700
+# A partir de esta cantidad, Abrir todos pide confirmación.
+UMBRAL_ABRIR_TODOS = 5
 
 CARPETA_ICONOS = Path(__file__).resolve().parent / "assets" / "icons"
 
@@ -46,6 +48,11 @@ ICONOS = {
     "check": "check",
     "alerta": "triangle-alert",
     "cerrar": "x",
+    "carpeta": "folder",
+    "carpeta_mas": "folder-plus",
+    "volver": "arrow-left",
+    "cuadricula": "layout-grid",
+    "lista": "list",
 }
 
 COLORES = {
@@ -207,7 +214,9 @@ class Aplicacion(ctk.CTk):
         super().__init__()
         self.ruta = ruta if ruta is not None else datos.ruta_datos()
         self.iconos = iconos if iconos is not None else cargar_iconos()
-        self.enlaces: list = datos.cargar_enlaces(self.ruta)
+        self.coleccion: dict = datos.cargar_enlaces(self.ruta)
+        self._vista = "categorias"
+        self._seccion: str | None = None
         # Tk no es seguro entre hilos. El hilo de red solo deja el
         # resultado aqui; el hilo principal lo aplica con after().
         # La cola guarda el diccionario, no su posición: si se borra
@@ -244,7 +253,19 @@ class Aplicacion(ctk.CTk):
         self.fuente_detalle = ctk.CTkFont(size=12)
         self._configurar_ventana()
         self._construir()
+        self._aplicar_vista()
         self.refrescar_lista()
+
+    @property
+    def enlaces(self) -> list:
+        return self.coleccion["enlaces"]
+
+    @enlaces.setter
+    def enlaces(self, valor: list) -> None:
+        self.coleccion["enlaces"] = valor
+
+    def _guardar(self) -> None:
+        datos.guardar_enlaces(self.coleccion, self.ruta)
 
     def _configurar_ventana(self) -> None:
         self.title("Gestor de Enlaces")
@@ -342,6 +363,68 @@ class Aplicacion(ctk.CTk):
             command=self.cancelar_verificacion,
         )
 
+        self.fila_vista = ctk.CTkFrame(barra, fg_color="transparent")
+        self.fila_vista.pack(fill="x", padx=20, pady=(8, 0))
+        self.vista_control = ctk.CTkSegmentedButton(
+            self.fila_vista,
+            values=["Categorías", "Todos los enlaces"],
+            command=self._al_cambiar_vista,
+            height=36,
+            corner_radius=10,
+            font=self.fuente_detalle,
+            fg_color=COLORES["fondo"],
+            selected_color=COLORES["acento"],
+            selected_hover_color=COLORES["acento_hover"],
+            unselected_color=COLORES["barra"],
+            unselected_hover_color=COLORES["borde"],
+            text_color=COLORES["texto"],
+        )
+        self.vista_control.pack(side="left")
+        self.vista_control.set("Categorías")
+        self.vista_control._buttons_dict["Categorías"].configure(
+            image=self.iconos["cuadricula"],
+            compound="left",
+        )
+        self.vista_control._buttons_dict["Todos los enlaces"].configure(
+            image=self.iconos["lista"],
+            compound="left",
+        )
+        self.boton_volver = ctk.CTkButton(
+            self.fila_vista,
+            text="Volver",
+            image=self.iconos["volver"],
+            compound="left",
+            width=120,
+            height=36,
+            corner_radius=10,
+            fg_color=COLORES["fondo"],
+            hover_color=COLORES["borde"],
+            text_color=COLORES["texto"],
+            font=self.fuente_detalle,
+            command=self._volver_tarjetas,
+        )
+        self.titulo_seccion = ctk.CTkLabel(
+            self.fila_vista,
+            text="",
+            anchor="w",
+            text_color=COLORES["texto"],
+            font=self.fuente_titulo,
+        )
+        self.boton_nueva = ctk.CTkButton(
+            self.fila_vista,
+            text="Nueva categoría",
+            image=self.iconos["carpeta_mas"],
+            compound="left",
+            width=190,
+            height=36,
+            corner_radius=10,
+            fg_color=COLORES["acento"],
+            hover_color=COLORES["acento_hover"],
+            text_color=COLORES["texto_boton"],
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self.nueva_categoria,
+        )
+
         self.fila_buscar = ctk.CTkFrame(barra, fg_color="transparent")
         self.fila_buscar.pack(fill="x", padx=20, pady=(4, 0))
 
@@ -392,12 +475,13 @@ class Aplicacion(ctk.CTk):
         self.menu_filtro.pack(side="left")
         self.menu_filtro.set("Todos")
 
-        ctk.CTkLabel(
+        self._etiqueta_filtro_categoria = ctk.CTkLabel(
             self.fila_buscar,
             text="",
             image=self.iconos["categoria"],
             fg_color="transparent",
-        ).pack(side="left", padx=(12, 8))
+        )
+        self._etiqueta_filtro_categoria.pack(side="left", padx=(12, 8))
         self.menu_categoria = ctk.CTkOptionMenu(
             self.fila_buscar,
             values=["Todas", "Sin categoría"],
@@ -496,9 +580,10 @@ class Aplicacion(ctk.CTk):
 
         self.aviso.configure(text="")
         enlace = datos.enlace_nuevo(url)
+        enlace["categoria"] = self._categoria_para_alta()
         self.enlaces.append(enlace)
         try:
-            datos.guardar_enlaces(self.enlaces, self.ruta)
+            self._guardar()
         except OSError:
             self.enlaces.pop()
             self.aviso.configure(text="No se pudo guardar el enlace.")
@@ -507,7 +592,14 @@ class Aplicacion(ctk.CTk):
         self.entrada.delete(0, "end")
         self.refrescar_lista()
         self._enviar_verificacion(enlace, url, lote=None, cancelar=None)
-        if not coincide(enlace, self._filtro, self._texto_busqueda(), self._filtro_categoria):
+        if self._mostrando_tarjetas():
+            self.aviso.configure(text="Enlace añadido en Sin categoría.")
+        elif not coincide(
+            enlace,
+            self._filtro,
+            self._texto_busqueda(),
+            self._categoria_consulta(),
+        ):
             self.aviso.configure(text="Enlace añadido. No coincide con el filtro actual.")
 
     def _es_duplicado(self, url: str) -> bool:
@@ -613,18 +705,25 @@ class Aplicacion(ctk.CTk):
             self._filtro_categoria = etiqueta
         self.refrescar_lista()
 
-    def _categorias_conocidas(self) -> list[str]:
-        vistas: dict[str, str] = {}
-        for enlace in self.enlaces:
-            if not isinstance(enlace, dict):
+    def _nombres_categoria(self) -> list[str]:
+        """Nombres guardados, en el orden del archivo."""
+        nombres: list[str] = []
+        vistos: set[str] = set()
+        for ficha in self.coleccion.get("categorias") or []:
+            if not isinstance(ficha, dict):
                 continue
-            texto = str(enlace.get("categoria") or "").strip()
-            if not texto or texto in {"Todas", "Sin categoría"}:
+            texto = str(ficha.get("nombre") or "").strip()
+            if not texto:
                 continue
             clave = texto.casefold()
-            if clave not in vistas:
-                vistas[clave] = texto
-        return [vistas[clave] for clave in sorted(vistas, key=str.casefold)]
+            if clave in vistos:
+                continue
+            vistos.add(clave)
+            nombres.append(texto)
+        return nombres
+
+    def _categorias_conocidas(self) -> list[str]:
+        return self._nombres_categoria()
 
     def _etiqueta_categoria(self) -> str:
         if self._filtro_categoria == "sin":
@@ -689,7 +788,9 @@ class Aplicacion(ctk.CTk):
                 repetidos += 1
                 continue
             claves.add(clave)
-            nuevos.append(datos.enlace_nuevo(url))
+            enlace = datos.enlace_nuevo(url)
+            enlace["categoria"] = self._categoria_para_alta()
+            nuevos.append(enlace)
         self._incorporar(nuevos, repetidos, invalidos, 0, importacion=False)
 
     def _claves_conocidas(self) -> set[str]:
@@ -713,12 +814,19 @@ class Aplicacion(ctk.CTk):
         por_verificar: list[dict] | None = None,
     ) -> None:
         if nuevos:
+            categorias_previas = list(self.coleccion["categorias"])
+            if importacion:
+                for enlace in nuevos:
+                    nombre = str(enlace.get("categoria") or "").strip()
+                    if nombre:
+                        enlace["categoria"] = datos.asegurar_categoria(self.coleccion, nombre)
             self.enlaces.extend(nuevos)
             try:
-                datos.guardar_enlaces(self.enlaces, self.ruta)
+                self._guardar()
             except OSError:
                 conservados = {id(item) for item in nuevos}
                 self.enlaces = [item for item in self.enlaces if id(item) not in conservados]
+                self.coleccion["categorias"] = categorias_previas
                 self.aviso.configure(text="No se pudo guardar el enlace.")
                 return
             if not importacion:
@@ -733,13 +841,508 @@ class Aplicacion(ctk.CTk):
             visibles = [
                 enlace
                 for enlace in nuevos
-                if coincide(enlace, self._filtro, self._texto_busqueda(), self._filtro_categoria)
+                if coincide(
+                    enlace,
+                    self._filtro,
+                    self._texto_busqueda(),
+                    self._categoria_consulta(),
+                )
             ]
             if not visibles:
                 aviso = f"{aviso} No se ven con el filtro actual."
             elif len(visibles) < len(nuevos):
                 aviso = f"{aviso} Algunos no se ven con el filtro actual."
         self.aviso.configure(text=aviso)
+
+    def _mostrando_tarjetas(self) -> bool:
+        return self._vista == "categorias" and self._seccion is None
+
+    def _categoria_para_alta(self) -> str:
+        """Categoría de un enlace nuevo. Dentro de una sección, esa; si no, ninguna."""
+        if self._vista == "categorias" and self._seccion:
+            return self._seccion
+        return ""
+
+    def _categoria_consulta(self) -> str:
+        """Filtro de categoría según la vista. Dentro de una sección manda la sección."""
+        if self._vista == "categorias" and self._seccion is not None:
+            return "sin" if self._seccion == "" else self._seccion
+        return self._filtro_categoria
+
+    def _enlaces_de(self, nombre: str) -> list[dict]:
+        clave = nombre.strip().casefold()
+        resultado: list[dict] = []
+        for enlace in self.enlaces:
+            if not isinstance(enlace, dict):
+                continue
+            actual = str(enlace.get("categoria") or "").strip()
+            if not clave:
+                if not actual:
+                    resultado.append(enlace)
+            elif actual.casefold() == clave:
+                resultado.append(enlace)
+        return resultado
+
+    def _al_cambiar_vista(self, valor: str) -> None:
+        self._seccion = None
+        self._vista = "enlaces" if valor == "Todos los enlaces" else "categorias"
+        self._aplicar_vista()
+        self.refrescar_lista()
+
+    def _volver_tarjetas(self) -> None:
+        self._seccion = None
+        self._vista = "categorias"
+        try:
+            self.vista_control.set("Categorías")
+        except Exception:
+            pass
+        self._aplicar_vista()
+        self.refrescar_lista()
+
+    def _entrar_seccion(self, nombre: str) -> None:
+        self._vista = "categorias"
+        self._seccion = nombre
+        try:
+            self.vista_control.set("Categorías")
+        except Exception:
+            pass
+        self._aplicar_vista()
+        self.refrescar_lista()
+        enlaces = self._enlaces_de(nombre)
+        if enlaces:
+            self._iniciar_verificacion(enlaces, "Esta categoría no tiene enlaces.")
+
+    def _aplicar_vista(self) -> None:
+        en_seccion = self._vista == "categorias" and self._seccion is not None
+        if self._mostrando_tarjetas():
+            self.fila_buscar.pack_forget()
+            self.boton_volver.pack_forget()
+            self.titulo_seccion.pack_forget()
+            self.boton_nueva.pack(side="right")
+            return
+        self.fila_buscar.pack(fill="x", padx=20, pady=(4, 0), before=self.aviso)
+        self.boton_nueva.pack_forget()
+        if en_seccion:
+            self.boton_volver.pack(side="left", padx=(12, 8))
+            self.titulo_seccion.configure(text=self._seccion or "Sin categoría")
+            self.titulo_seccion.pack(side="left")
+            self._etiqueta_filtro_categoria.pack_forget()
+            self.menu_categoria.pack_forget()
+            return
+        self.boton_volver.pack_forget()
+        self.titulo_seccion.pack_forget()
+        self._etiqueta_filtro_categoria.pack(side="left", padx=(12, 8))
+        self.menu_categoria.pack(side="left")
+
+    def _pintar_tarjetas(self) -> None:
+        rejilla = ctk.CTkFrame(self.lista, fg_color="transparent")
+        rejilla.pack(fill="x", padx=4, pady=4)
+        rejilla.grid_columnconfigure((0, 1), weight=1)
+        fichas: list[tuple[str, bool]] = [("", False)]
+        for nombre in self._nombres_categoria():
+            fichas.append((nombre, True))
+        for indice, (nombre, editable) in enumerate(fichas):
+            self._crear_tarjeta(rejilla, nombre, editable, indice)
+
+    def _crear_tarjeta(
+        self,
+        padre: ctk.CTkFrame,
+        nombre: str,
+        editable: bool,
+        indice: int,
+    ) -> None:
+        enlaces = self._enlaces_de(nombre)
+        tarjeta = ctk.CTkFrame(padre, fg_color=COLORES["fila"], corner_radius=12)
+        tarjeta.grid(row=indice // 2, column=indice % 2, sticky="nsew", padx=8, pady=8)
+
+        cabecera = ctk.CTkFrame(tarjeta, fg_color="transparent")
+        cabecera.pack(fill="x", padx=16, pady=(14, 4))
+        ctk.CTkLabel(
+            cabecera,
+            text="",
+            image=self.iconos["carpeta"],
+            fg_color="transparent",
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkLabel(
+            cabecera,
+            text="Sin categoría" if not nombre else nombre,
+            anchor="w",
+            text_color=COLORES["texto"],
+            font=self.fuente_titulo,
+            fg_color="transparent",
+        ).pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(
+            tarjeta,
+            text=_palabra(len(enlaces), "enlace", "enlaces"),
+            anchor="w",
+            text_color=COLORES["secundario"],
+            font=self.fuente_url,
+            fg_color="transparent",
+        ).pack(fill="x", padx=16)
+        ctk.CTkLabel(
+            tarjeta,
+            text=texto_resumen(enlaces),
+            anchor="w",
+            justify="left",
+            wraplength=340,
+            text_color=COLORES["secundario"],
+            font=self.fuente_detalle,
+            fg_color="transparent",
+        ).pack(fill="x", padx=16, pady=(4, 8))
+
+        acciones = ctk.CTkFrame(tarjeta, fg_color="transparent")
+        acciones.pack(fill="x", padx=12, pady=(0, 12))
+        self._boton_fila(acciones, "abrir", lambda n=nombre: self.abrir_todos(n)).pack(
+            side="left", padx=3
+        )
+        self._boton_fila(acciones, "verificar", lambda n=nombre: self.verificar_categoria(n)).pack(
+            side="left", padx=3
+        )
+        if editable:
+            self._boton_fila(acciones, "editar", lambda n=nombre: self.renombrar_categoria(n)).pack(
+                side="left", padx=3
+            )
+            self._boton_fila(
+                acciones,
+                "eliminar",
+                lambda n=nombre: self.confirmar_eliminar_categoria(n),
+            ).pack(side="left", padx=3)
+        self._ligar_tarjeta(tarjeta, nombre)
+
+    def _ligar_tarjeta(self, widget, nombre: str) -> None:
+        if isinstance(widget, ctk.CTkButton):
+            return
+        widget.bind("<Button-1>", lambda _evento, n=nombre: self._entrar_seccion(n))
+        for hijo in widget.winfo_children():
+            self._ligar_tarjeta(hijo, nombre)
+
+    def verificar_categoria(self, nombre: str) -> None:
+        self._iniciar_verificacion(
+            self._enlaces_de(nombre),
+            "Esta categoría no tiene enlaces.",
+        )
+
+    def abrir_todos(self, nombre: str) -> None:
+        enlaces = self._enlaces_de(nombre)
+        if not enlaces:
+            self.aviso.configure(text="Esta categoría no tiene enlaces.")
+            return
+        if len(enlaces) > UMBRAL_ABRIR_TODOS:
+            self._confirmar_abrir_todos(enlaces)
+            return
+        self._abrir_enlaces(enlaces)
+
+    def _confirmar_abrir_todos(self, enlaces: list[dict]) -> None:
+        dialogo = ctk.CTkToplevel(self)
+        dialogo.title("Abrir enlaces")
+        dialogo.resizable(False, False)
+        dialogo.configure(fg_color=COLORES["fondo"])
+        dialogo.transient(self)
+        self.update_idletasks()
+        ancho, alto = 480, 200
+        x = self.winfo_rootx() + max(0, (self.winfo_width() - ancho) // 2)
+        y = self.winfo_rooty() + max(0, (self.winfo_height() - alto) // 2)
+        dialogo.geometry(f"{ancho}x{alto}+{x}+{y}")
+        ctk.CTkLabel(
+            dialogo,
+            text=f"Vas a abrir {len(enlaces)} enlaces.",
+            text_color=COLORES["texto"],
+            font=self.fuente_titulo,
+        ).pack(anchor="w", padx=24, pady=(22, 16))
+        acciones = ctk.CTkFrame(dialogo, fg_color="transparent")
+        acciones.pack(anchor="e", padx=24, pady=(0, 20))
+        ctk.CTkButton(
+            acciones,
+            text="Cancelar",
+            width=110,
+            height=36,
+            corner_radius=8,
+            fg_color=COLORES["barra"],
+            hover_color=COLORES["borde"],
+            text_color=COLORES["texto"],
+            command=dialogo.destroy,
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            acciones,
+            text="Abrir",
+            width=110,
+            height=36,
+            corner_radius=8,
+            fg_color=COLORES["acento"],
+            hover_color=COLORES["acento_hover"],
+            text_color=COLORES["texto_boton"],
+            command=lambda: self._aceptar_abrir_todos(enlaces, dialogo),
+        ).pack(side="left")
+        dialogo.protocol("WM_DELETE_WINDOW", dialogo.destroy)
+        dialogo.bind("<Escape>", lambda _evento: dialogo.destroy())
+        dialogo.after(50, dialogo.lift)
+        dialogo.grab_set()
+
+    def _aceptar_abrir_todos(self, enlaces: list[dict], dialogo: ctk.CTkToplevel) -> None:
+        try:
+            dialogo.destroy()
+        except Exception:
+            pass
+        self._abrir_enlaces(enlaces)
+
+    def _abrir_en_navegador(self, enlace: dict) -> bool:
+        try:
+            return bool(webbrowser.open(str(enlace.get("url") or "")))
+        except Exception:
+            return False
+
+    def _abrir_enlaces(self, enlaces: list[dict]) -> None:
+        abiertos = 0
+        for enlace in enlaces:
+            if not self._sigue_en_lista(enlace):
+                continue
+            if self._abrir_en_navegador(enlace):
+                enlace["visitado"] = True
+                abiertos += 1
+        try:
+            self._guardar()
+        except OSError:
+            self.aviso.configure(text="No se pudo guardar el enlace.")
+            return
+        if abiertos == 0:
+            self.aviso.configure(text="No se pudo abrir ninguno.")
+        elif abiertos == 1:
+            self.aviso.configure(text="Se abrió 1 enlace.")
+        else:
+            self.aviso.configure(text=f"Se abrieron {abiertos} enlaces.")
+        self.refrescar_lista()
+
+    def nueva_categoria(self) -> None:
+        self._pedir_nombre("Nueva categoría", "", self._crear_desde_dialogo)
+
+    def renombrar_categoria(self, nombre: str) -> None:
+        self._pedir_nombre(
+            "Renombrar categoría",
+            nombre,
+            lambda texto: self._renombrar_desde_dialogo(nombre, texto),
+        )
+
+    def _crear_desde_dialogo(self, texto: str) -> str | None:
+        try:
+            datos.crear_categoria(self.coleccion, texto)
+            self._guardar()
+        except datos.ErrorCategoria as exc:
+            return str(exc)
+        except OSError:
+            self.coleccion["categorias"].pop()
+            return "No se pudo guardar."
+        return None
+
+    def _renombrar_desde_dialogo(self, anterior: str, texto: str) -> str | None:
+        try:
+            datos.renombrar_categoria(self.coleccion, anterior, texto)
+            self._guardar()
+        except datos.ErrorCategoria as exc:
+            return str(exc)
+        except OSError:
+            try:
+                datos.renombrar_categoria(self.coleccion, texto, anterior)
+            except datos.ErrorCategoria:
+                pass
+            return "No se pudo guardar."
+        nuevo = texto.strip()
+        if self._seccion is not None and self._seccion.casefold() == anterior.strip().casefold():
+            self._seccion = nuevo
+            self.titulo_seccion.configure(text=nuevo)
+        if self._filtro_categoria.casefold() == anterior.strip().casefold():
+            self._filtro_categoria = nuevo
+        return None
+
+    def _pedir_nombre(self, titulo: str, inicial: str, aplicar) -> None:
+        dialogo = ctk.CTkToplevel(self)
+        dialogo.title(titulo)
+        dialogo.resizable(False, False)
+        dialogo.configure(fg_color=COLORES["fondo"])
+        dialogo.transient(self)
+        self.update_idletasks()
+        ancho, alto = 460, 230
+        x = self.winfo_rootx() + max(0, (self.winfo_width() - ancho) // 2)
+        y = self.winfo_rooty() + max(0, (self.winfo_height() - alto) // 2)
+        dialogo.geometry(f"{ancho}x{alto}+{x}+{y}")
+        ctk.CTkLabel(
+            dialogo,
+            text=titulo,
+            anchor="w",
+            text_color=COLORES["texto"],
+            font=self.fuente_titulo,
+        ).pack(fill="x", padx=24, pady=(20, 8))
+        campo = ctk.CTkEntry(
+            dialogo,
+            height=36,
+            corner_radius=10,
+            border_width=1,
+            border_color=COLORES["borde"],
+            fg_color=COLORES["barra"],
+            text_color=COLORES["texto"],
+            font=self.fuente_url,
+        )
+        campo.pack(fill="x", padx=24)
+        campo.insert(0, inicial)
+        aviso = ctk.CTkLabel(
+            dialogo,
+            text="",
+            anchor="w",
+            text_color=COLORES["aviso"],
+            font=self.fuente_detalle,
+        )
+        aviso.pack(fill="x", padx=24, pady=(8, 0))
+
+        def guardar() -> None:
+            error = aplicar(campo.get())
+            if error:
+                aviso.configure(text=error)
+                return
+            try:
+                dialogo.destroy()
+            except Exception:
+                pass
+            self._aplicar_vista()
+            self.refrescar_lista()
+
+        acciones = ctk.CTkFrame(dialogo, fg_color="transparent")
+        acciones.pack(anchor="e", padx=24, pady=(12, 20))
+        ctk.CTkButton(
+            acciones,
+            text="Cancelar",
+            width=110,
+            height=36,
+            corner_radius=8,
+            fg_color=COLORES["barra"],
+            hover_color=COLORES["borde"],
+            text_color=COLORES["texto"],
+            command=dialogo.destroy,
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            acciones,
+            text="Guardar",
+            width=110,
+            height=36,
+            corner_radius=8,
+            fg_color=COLORES["acento"],
+            hover_color=COLORES["acento_hover"],
+            text_color=COLORES["texto_boton"],
+            command=guardar,
+        ).pack(side="left")
+        dialogo.protocol("WM_DELETE_WINDOW", dialogo.destroy)
+        dialogo.bind("<Escape>", lambda _evento: dialogo.destroy())
+        dialogo.bind("<Return>", lambda _evento: guardar())
+        dialogo.after(50, dialogo.lift)
+        dialogo.after(50, campo.focus)
+        dialogo.grab_set()
+
+    def confirmar_eliminar_categoria(self, nombre: str) -> None:
+        dialogo = ctk.CTkToplevel(self)
+        dialogo.title("Eliminar categoría")
+        dialogo.resizable(False, False)
+        dialogo.configure(fg_color=COLORES["fondo"])
+        dialogo.transient(self)
+        self.update_idletasks()
+        ancho, alto = 520, 280
+        x = self.winfo_rootx() + max(0, (self.winfo_width() - ancho) // 2)
+        y = self.winfo_rooty() + max(0, (self.winfo_height() - alto) // 2)
+        dialogo.geometry(f"{ancho}x{alto}+{x}+{y}")
+        cantidad = len(self._enlaces_de(nombre))
+        ctk.CTkLabel(
+            dialogo,
+            text=f"Eliminar {nombre}",
+            anchor="w",
+            text_color=COLORES["texto"],
+            font=self.fuente_titulo,
+        ).pack(fill="x", padx=24, pady=(20, 6))
+        ctk.CTkLabel(
+            dialogo,
+            text=f"Tiene {_palabra(cantidad, 'enlace', 'enlaces')}.",
+            anchor="w",
+            text_color=COLORES["secundario"],
+            font=self.fuente_url,
+        ).pack(fill="x", padx=24, pady=(0, 10))
+        eleccion = ctk.StringVar(value="mover")
+        ctk.CTkRadioButton(
+            dialogo,
+            text="Mover los enlaces a Sin categoría",
+            variable=eleccion,
+            value="mover",
+            text_color=COLORES["texto"],
+            fg_color=COLORES["acento"],
+            hover_color=COLORES["acento_hover"],
+            font=self.fuente_url,
+        ).pack(anchor="w", padx=24, pady=4)
+        ctk.CTkRadioButton(
+            dialogo,
+            text="Eliminar también los enlaces",
+            variable=eleccion,
+            value="borrar",
+            text_color=COLORES["texto"],
+            fg_color=COLORES["acento"],
+            hover_color=COLORES["acento_hover"],
+            font=self.fuente_url,
+        ).pack(anchor="w", padx=24, pady=(4, 12))
+        acciones = ctk.CTkFrame(dialogo, fg_color="transparent")
+        acciones.pack(anchor="e", padx=24, pady=(0, 20))
+        ctk.CTkButton(
+            acciones,
+            text="Cancelar",
+            width=110,
+            height=36,
+            corner_radius=8,
+            fg_color=COLORES["barra"],
+            hover_color=COLORES["borde"],
+            text_color=COLORES["texto"],
+            command=dialogo.destroy,
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            acciones,
+            text="Eliminar",
+            width=110,
+            height=36,
+            corner_radius=8,
+            fg_color=COLORES_ESTADO["caído"],
+            hover_color="#C4473A",
+            text_color=COLORES["texto_boton"],
+            command=lambda: self._eliminar_categoria(nombre, eleccion.get() == "borrar", dialogo),
+        ).pack(side="left")
+        dialogo.protocol("WM_DELETE_WINDOW", dialogo.destroy)
+        dialogo.bind("<Escape>", lambda _evento: dialogo.destroy())
+        dialogo.after(50, dialogo.lift)
+        dialogo.grab_set()
+
+    def _eliminar_categoria(self, nombre: str, borrar_enlaces: bool, dialogo: ctk.CTkToplevel) -> None:
+        try:
+            dialogo.destroy()
+        except Exception:
+            pass
+        categorias_previas = list(self.coleccion["categorias"])
+        enlaces_previos = list(self.enlaces)
+        textos = [
+            (enlace, enlace.get("categoria"))
+            for enlace in enlaces_previos
+            if isinstance(enlace, dict)
+        ]
+        try:
+            datos.eliminar_categoria(self.coleccion, nombre, borrar_enlaces)
+            self._guardar()
+        except datos.ErrorCategoria as exc:
+            self.aviso.configure(text=str(exc))
+            return
+        except OSError:
+            self.coleccion["categorias"] = categorias_previas
+            self.enlaces = enlaces_previos
+            for enlace, categoria in textos:
+                enlace["categoria"] = categoria
+            self.aviso.configure(text="No se pudo guardar el enlace.")
+            return
+        self.aviso.configure(text="")
+        if self._filtro_categoria.casefold() == nombre.strip().casefold():
+            self._filtro_categoria = "todas"
+        if self._seccion is not None and self._seccion.casefold() == nombre.strip().casefold():
+            self._volver_tarjetas()
+            return
+        self.refrescar_lista()
 
     def editar(self, enlace: dict) -> None:
         """Pide título, categoría y notas. No toca la URL ni el estado."""
@@ -762,7 +1365,7 @@ class Aplicacion(ctk.CTk):
         dialogo.configure(fg_color=COLORES["fondo"])
         dialogo.transient(self)
         self.update_idletasks()
-        ancho, alto = 520, 540
+        ancho, alto = 520, 620
         x = self.winfo_rootx() + max(0, (self.winfo_width() - ancho) // 2)
         y = self.winfo_rooty() + max(0, (self.winfo_height() - alto) // 2)
         dialogo.geometry(f"{ancho}x{alto}+{x}+{y}")
@@ -807,7 +1410,37 @@ class Aplicacion(ctk.CTk):
             text_color=COLORES["texto"],
             font=self.fuente_detalle,
         ).pack(fill="x", padx=24, pady=(14, 6))
-        categoria = ctk.CTkEntry(
+        opciones = ["Sin categoría", *self._nombres_categoria()]
+        actual = str(enlace.get("categoria") or "").strip()
+        if actual and all(actual.casefold() != item.casefold() for item in opciones):
+            opciones.append(actual)
+        opciones.append("Nueva categoría")
+        self._menu_categoria_edicion = ctk.CTkOptionMenu(
+            dialogo,
+            values=opciones,
+            command=self._al_elegir_categoria_edicion,
+            height=36,
+            corner_radius=10,
+            fg_color=COLORES["barra"],
+            button_color=COLORES["borde"],
+            button_hover_color=COLORES["acento"],
+            dropdown_fg_color=COLORES["barra"],
+            dropdown_hover_color=COLORES["borde"],
+            dropdown_text_color=COLORES["texto"],
+            text_color=COLORES["texto"],
+            font=self.fuente_url,
+            dropdown_font=self.fuente_detalle,
+        )
+        self._menu_categoria_edicion.pack(fill="x", padx=24)
+        if not actual:
+            self._menu_categoria_edicion.set("Sin categoría")
+        else:
+            elegido = next(
+                (item for item in opciones if item.casefold() == actual.casefold()),
+                actual,
+            )
+            self._menu_categoria_edicion.set(elegido)
+        self._entrada_categoria_nueva = ctk.CTkEntry(
             dialogo,
             height=36,
             corner_radius=10,
@@ -815,18 +1448,25 @@ class Aplicacion(ctk.CTk):
             border_color=COLORES["borde"],
             fg_color=COLORES["barra"],
             text_color=COLORES["texto"],
+            placeholder_text="Nombre de la categoría",
             font=self.fuente_url,
         )
-        categoria.pack(fill="x", padx=24)
-        categoria.insert(0, str(enlace.get("categoria") or ""))
+        self._aviso_categoria = ctk.CTkLabel(
+            dialogo,
+            text="",
+            anchor="w",
+            text_color=COLORES["aviso"],
+            font=self.fuente_detalle,
+        )
 
-        ctk.CTkLabel(
+        self._ancla_notas = ctk.CTkLabel(
             dialogo,
             text="Notas",
             anchor="w",
             text_color=COLORES["texto"],
             font=self.fuente_detalle,
-        ).pack(fill="x", padx=24, pady=(14, 6))
+        )
+        self._ancla_notas.pack(fill="x", padx=24, pady=(14, 6))
         notas = ctk.CTkTextbox(
             dialogo,
             height=160,
@@ -862,7 +1502,7 @@ class Aplicacion(ctk.CTk):
             fg_color=COLORES["acento"],
             hover_color=COLORES["acento_hover"],
             text_color=COLORES["texto_boton"],
-            command=lambda: self._guardar_edicion(enlace, titulo, categoria, notas, dialogo),
+            command=lambda: self._guardar_edicion(enlace, titulo, notas, dialogo),
         ).pack(side="left")
 
         dialogo.protocol("WM_DELETE_WINDOW", lambda: self._cerrar_edicion(dialogo))
@@ -875,6 +1515,10 @@ class Aplicacion(ctk.CTk):
         self._campo_titulo = None
         self._boton_titulo = None
         self._titulo_obtenido = None
+        self._menu_categoria_edicion = None
+        self._entrada_categoria_nueva = None
+        self._aviso_categoria = None
+        self._ancla_notas = None
         if getattr(self, "_dialogo_editar", None) is dialogo:
             self._dialogo_editar = None
         try:
@@ -930,11 +1574,26 @@ class Aplicacion(ctk.CTk):
         except Exception:
             return
 
+    def _al_elegir_categoria_edicion(self, valor: str) -> None:
+        entrada = self._entrada_categoria_nueva
+        aviso = self._aviso_categoria
+        if entrada is None:
+            return
+        if valor == "Nueva categoría":
+            ancla = self._ancla_notas
+            entrada.pack(fill="x", padx=24, pady=(8, 0), before=ancla)
+            if aviso is not None:
+                aviso.pack(fill="x", padx=24, pady=(4, 0), before=ancla)
+            entrada.focus()
+            return
+        entrada.pack_forget()
+        if aviso is not None:
+            aviso.pack_forget()
+
     def _guardar_edicion(
         self,
         enlace: dict,
         titulo: ctk.CTkEntry,
-        categoria: ctk.CTkEntry,
         notas: ctk.CTkTextbox,
         dialogo: ctk.CTkToplevel,
     ) -> None:
@@ -945,6 +1604,28 @@ class Aplicacion(ctk.CTk):
         anterior_manual = enlace.get("titulo_manual")
         anterior_categoria = enlace.get("categoria")
         anterior_notas = enlace.get("notas")
+        categorias_previas = list(self.coleccion["categorias"])
+        menu = self._menu_categoria_edicion
+        if menu is None:
+            return
+        elegido = menu.get()
+        try:
+            if elegido == "Nueva categoría":
+                campo = self._entrada_categoria_nueva
+                creada = datos.crear_categoria(
+                    self.coleccion,
+                    "" if campo is None else campo.get(),
+                )
+                categoria = str(creada.get("nombre") or "")
+            elif elegido == "Sin categoría":
+                categoria = ""
+            else:
+                categoria = elegido
+        except datos.ErrorCategoria as exc:
+            if self._aviso_categoria is not None:
+                self._aviso_categoria.configure(text=str(exc))
+                self._aviso_categoria.pack(fill="x", padx=24, pady=(4, 0))
+            return
         decision = datos.resolver_edicion_titulo(
             str(anterior_titulo or ""),
             titulo.get(),
@@ -953,15 +1634,16 @@ class Aplicacion(ctk.CTk):
         )
         if decision is not None:
             enlace["titulo"], enlace["titulo_manual"] = decision
-        enlace["categoria"] = categoria.get().strip()
+        enlace["categoria"] = categoria
         enlace["notas"] = notas.get("1.0", "end-1c").strip()
         try:
-            datos.guardar_enlaces(self.enlaces, self.ruta)
+            self._guardar()
         except OSError:
             enlace["titulo"] = anterior_titulo
             enlace["titulo_manual"] = anterior_manual
             enlace["categoria"] = anterior_categoria
             enlace["notas"] = anterior_notas
+            self.coleccion["categorias"] = categorias_previas
             self.aviso.configure(text="No se pudo guardar el enlace.")
             return
         self._cerrar_edicion(dialogo)
@@ -1216,7 +1898,7 @@ class Aplicacion(ctk.CTk):
             enlace["titulo"], enlace["titulo_manual"] = decision
         enlace["ultima_verificacion"] = momento
         try:
-            datos.guardar_enlaces(self.enlaces, self.ruta)
+            self._guardar()
         except OSError:
             self._fallo_al_guardar = True
             if not self._verificacion_masiva:
@@ -1236,7 +1918,10 @@ class Aplicacion(ctk.CTk):
     def _pintar_fila(self, enlace: dict) -> None:
         """Actualiza la fila si sigue a la vista. Si entra o sale del filtro, redibuja."""
         self._pintar_resumen()
-        visible = coincide(enlace, self._filtro, self._texto_busqueda(), self._filtro_categoria)
+        if self._mostrando_tarjetas():
+            self.refrescar_lista()
+            return
+        visible = coincide(enlace, self._filtro, self._texto_busqueda(), self._categoria_consulta())
         info = self._filas.get(id(enlace))
         en_pantalla = False
         if info:
@@ -1268,14 +1953,25 @@ class Aplicacion(ctk.CTk):
         self._filas = {}
         for hijo in self.lista.winfo_children():
             hijo.destroy()
+        if self._mostrando_tarjetas():
+            self._pintar_tarjetas()
+            self._pintar_resumen()
+            try:
+                self.lista._parent_canvas.yview_moveto(fraccion)
+            except Exception:
+                pass
+            return
         self._asegurar_filtro_categoria()
+        consulta = self._categoria_consulta()
         visibles = [
             enlace
             for enlace in self.enlaces
             if isinstance(enlace, dict)
-            and coincide(enlace, self._filtro, self._texto_busqueda(), self._filtro_categoria)
+            and coincide(enlace, self._filtro, self._texto_busqueda(), consulta)
         ]
-        if not self.enlaces:
+        if self._seccion is not None and not self._enlaces_de(self._seccion):
+            mensaje = "Esta categoría no tiene enlaces."
+        elif not self.enlaces:
             mensaje = "Todavía no hay enlaces."
         elif not visibles:
             mensaje = "Ningún enlace coincide con la búsqueda."
@@ -1305,19 +2001,14 @@ class Aplicacion(ctk.CTk):
         """Abre la URL en el navegador y, si arranca, marca el enlace como visitado."""
         if not self._sigue_en_lista(enlace):
             return
-        url = str(enlace.get("url") or "")
-        try:
-            abierto = webbrowser.open(url)
-        except Exception:
-            abierto = False
-        if not abierto:
+        if not self._abrir_en_navegador(enlace):
             self.aviso.configure(text="No se pudo abrir el enlace.")
             return
 
         self.aviso.configure(text="")
         enlace["visitado"] = True
         try:
-            datos.guardar_enlaces(self.enlaces, self.ruta)
+            self._guardar()
         except OSError:
             self.aviso.configure(text="No se pudo guardar el enlace.")
             return
@@ -1423,7 +2114,7 @@ class Aplicacion(ctk.CTk):
             return
         self.enlaces = [item for item in self.enlaces if item is not enlace]
         try:
-            datos.guardar_enlaces(self.enlaces, self.ruta)
+            self._guardar()
         except OSError:
             self.aviso.configure(text="No se pudo guardar el enlace.")
             return
