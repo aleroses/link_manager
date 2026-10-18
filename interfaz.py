@@ -79,6 +79,66 @@ def texto_progreso(hechos: int, total: int) -> str:
     return f"{hechos} de {total} ({hechos * 100 // total}%)"
 
 
+# Etiqueta visible -> clave interna. Visitado no es un estado.
+FILTROS = (
+    ("Todos", "todos"),
+    ("Pendiente", "pendiente"),
+    ("Activo", "activo"),
+    ("Error", "error"),
+    ("Caído", "caído"),
+    ("Visitado", "visitado"),
+    ("No visitado", "no_visitado"),
+)
+_CLAVE_FILTRO = {etiqueta: clave for etiqueta, clave in FILTROS}
+
+
+def _palabra(cantidad: int, singular: str, plural: str) -> str:
+    return f"{cantidad} {singular if cantidad == 1 else plural}"
+
+
+def texto_resumen(enlaces: list) -> str:
+    """Recuento de toda la colección: '1 activo, 3 caídos, 2 errores, 5 pendientes'."""
+    cuentas = {"activo": 0, "caído": 0, "error": 0, "pendiente": 0}
+    for enlace in enlaces:
+        if not isinstance(enlace, dict):
+            continue
+        estado = str(enlace.get("estado") or "pendiente")
+        if estado in cuentas:
+            cuentas[estado] += 1
+    return ", ".join(
+        (
+            _palabra(cuentas["activo"], "activo", "activos"),
+            _palabra(cuentas["caído"], "caído", "caídos"),
+            _palabra(cuentas["error"], "error", "errores"),
+            _palabra(cuentas["pendiente"], "pendiente", "pendientes"),
+        )
+    )
+
+
+def coincide(enlace: dict, filtro: str, texto: str) -> bool:
+    """El filtro y el texto se aplican a la vez. El texto no distingue mayúsculas."""
+    if filtro == "visitado":
+        if not enlace.get("visitado"):
+            return False
+    elif filtro == "no_visitado":
+        if enlace.get("visitado"):
+            return False
+    elif filtro not in {"", "todos"}:
+        if str(enlace.get("estado") or "pendiente") != filtro:
+            return False
+
+    consulta = texto.strip().casefold()
+    if not consulta:
+        return True
+    campos = (
+        str(enlace.get("titulo") or ""),
+        str(enlace.get("url") or ""),
+        str(enlace.get("notas") or ""),
+        str(enlace.get("categoria") or ""),
+    )
+    return any(consulta in campo.casefold() for campo in campos)
+
+
 def cargar_iconos(carpeta: Path | None = None) -> dict[str, ctk.CTkImage]:
     """Carga el PNG de 40 px y lo muestra a 20 px para pantallas HiDPI.
 
@@ -134,6 +194,7 @@ class Aplicacion(ctk.CTk):
         self._filas: dict[int, dict] = {}
         self._after_resultados: str | None = None
         self._after_ocultar: str | None = None
+        self._filtro = "todos"
         self.fuente_titulo = ctk.CTkFont(size=15, weight="bold")
         self.fuente_url = ctk.CTkFont(size=13)
         self.fuente_detalle = ctk.CTkFont(size=12)
@@ -236,6 +297,56 @@ class Aplicacion(ctk.CTk):
             command=self.cancelar_verificacion,
         )
 
+        self.fila_buscar = ctk.CTkFrame(barra, fg_color="transparent")
+        self.fila_buscar.pack(fill="x", padx=20, pady=(4, 0))
+
+        ctk.CTkLabel(
+            self.fila_buscar,
+            text="",
+            image=self.iconos["buscar"],
+            fg_color="transparent",
+        ).pack(side="left", padx=(0, 8))
+        self.busqueda = ctk.CTkEntry(
+            self.fila_buscar,
+            placeholder_text="Buscar por título, URL, notas o categoría",
+            height=36,
+            corner_radius=10,
+            border_width=1,
+            border_color=COLORES["borde"],
+            fg_color=COLORES["fondo"],
+            text_color=COLORES["texto"],
+            placeholder_text_color=COLORES["secundario"],
+            font=self.fuente_url,
+        )
+        self.busqueda.pack(side="left", fill="x", expand=True, padx=(0, 12))
+        self.busqueda.bind("<KeyRelease>", self._al_buscar)
+
+        ctk.CTkLabel(
+            self.fila_buscar,
+            text="",
+            image=self.iconos["filtrar"],
+            fg_color="transparent",
+        ).pack(side="left", padx=(0, 8))
+        self.menu_filtro = ctk.CTkOptionMenu(
+            self.fila_buscar,
+            values=[etiqueta for etiqueta, _clave in FILTROS],
+            command=self._al_cambiar_filtro,
+            width=150,
+            height=36,
+            corner_radius=10,
+            fg_color=COLORES["fondo"],
+            button_color=COLORES["borde"],
+            button_hover_color=COLORES["acento"],
+            dropdown_fg_color=COLORES["barra"],
+            dropdown_hover_color=COLORES["borde"],
+            dropdown_text_color=COLORES["texto"],
+            text_color=COLORES["texto"],
+            font=self.fuente_detalle,
+            dropdown_font=self.fuente_detalle,
+        )
+        self.menu_filtro.pack(side="left")
+        self.menu_filtro.set("Todos")
+
         self.aviso = ctk.CTkLabel(
             barra,
             text="",
@@ -244,7 +355,35 @@ class Aplicacion(ctk.CTk):
             text_color=COLORES["aviso"],
             font=self.fuente_detalle,
         )
-        self.aviso.pack(fill="x", padx=22, pady=(0, 12))
+        self.aviso.pack(fill="x", padx=22, pady=(8, 12))
+
+        self.barra_inferior = ctk.CTkFrame(self, fg_color=COLORES["barra"], corner_radius=0)
+        self.barra_inferior.pack(side="bottom", fill="x")
+        interior_inferior = ctk.CTkFrame(self.barra_inferior, fg_color="transparent")
+        interior_inferior.pack(fill="x", padx=20, pady=10)
+        self.resumen = ctk.CTkLabel(
+            interior_inferior,
+            text=texto_resumen([]),
+            anchor="w",
+            text_color=COLORES["secundario"],
+            font=self.fuente_detalle,
+        )
+        self.resumen.pack(side="left", fill="x", expand=True, padx=(0, 12))
+        self.boton_reintentar = ctk.CTkButton(
+            interior_inferior,
+            text="Reintentar caídos",
+            image=self.iconos["verificar"],
+            compound="left",
+            width=200,
+            height=36,
+            corner_radius=10,
+            fg_color=COLORES["acento"],
+            hover_color=COLORES["acento_hover"],
+            text_color=COLORES["texto_boton"],
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self.reintentar_caidos,
+        )
+        self.boton_reintentar.pack(side="right")
 
         self.lista = ctk.CTkScrollableFrame(
             self,
@@ -283,6 +422,8 @@ class Aplicacion(ctk.CTk):
         self.entrada.delete(0, "end")
         self.refrescar_lista()
         self._enviar_verificacion(enlace, url, lote=None, cancelar=None)
+        if not coincide(enlace, self._filtro, self._texto_busqueda()):
+            self.aviso.configure(text="Enlace añadido. No coincide con el filtro actual.")
 
     def _es_duplicado(self, url: str) -> bool:
         clave = verificador.clave_url(url)
@@ -364,13 +505,39 @@ class Aplicacion(ctk.CTk):
         self._escribir_resultado(enlace, estado, codigo, titulo, momento, token)
         self._cerrar_trabajo(lote, contado=True)
 
+    def _texto_busqueda(self) -> str:
+        return self.busqueda.get()
+
+    def _al_buscar(self, _evento: object = None) -> None:
+        self.refrescar_lista()
+
+    def _al_cambiar_filtro(self, etiqueta: str) -> None:
+        self._filtro = _CLAVE_FILTRO.get(etiqueta, "todos")
+        self.refrescar_lista()
+
+    def _pintar_resumen(self) -> None:
+        self.resumen.configure(text=texto_resumen(self.enlaces))
+
     def verificar_todos(self) -> None:
-        """Comprueba la lista actual. Lo que se añada después va aparte."""
+        """Comprueba la lista completa, también lo que el filtro oculta."""
+        seleccion = [enlace for enlace in self.enlaces if isinstance(enlace, dict)]
+        self._iniciar_verificacion(seleccion, "Todavía no hay enlaces para verificar.")
+
+    def reintentar_caidos(self) -> None:
+        """Vuelve a comprobar los caídos, también los que el filtro oculta."""
+        seleccion = [
+            enlace
+            for enlace in self.enlaces
+            if isinstance(enlace, dict) and str(enlace.get("estado") or "") == "caído"
+        ]
+        self._iniciar_verificacion(seleccion, "No hay enlaces caídos.")
+
+    def _iniciar_verificacion(self, seleccion: list, aviso_vacio: str) -> None:
+        """Encola una tanda. Como máximo hay 8 hilos, compartidos con Añadir."""
         if self._verificacion_masiva or self._cerrando:
             return
-        seleccion = [enlace for enlace in self.enlaces if isinstance(enlace, dict)]
         if not seleccion:
-            self.aviso.configure(text="Todavía no hay enlaces para verificar.")
+            self.aviso.configure(text=aviso_vacio)
             return
 
         self._lote += 1
@@ -415,6 +582,7 @@ class Aplicacion(ctk.CTk):
         self.texto_progreso.configure(text=texto_progreso(0, self._total_lote))
         self.boton_cancelar.configure(state="normal")
         self.boton_verificar.configure(state="disabled", fg_color=COLORES["borde"])
+        self.boton_reintentar.configure(state="disabled", fg_color=COLORES["borde"])
         self.barra_progreso.grid(row=0, column=1, sticky="ew", padx=(14, 12))
         self.texto_progreso.grid(row=0, column=2, padx=(0, 12))
         self.boton_cancelar.grid(row=0, column=3)
@@ -424,6 +592,7 @@ class Aplicacion(ctk.CTk):
         self.texto_progreso.grid_remove()
         self.boton_cancelar.grid_remove()
         self.boton_verificar.configure(state="normal", fg_color=COLORES["acento"])
+        self.boton_reintentar.configure(state="normal", fg_color=COLORES["acento"])
 
     def _pintar_progreso(self) -> None:
         total = self._total_lote
@@ -539,38 +708,69 @@ class Aplicacion(ctk.CTk):
         return titulo, detalle, color
 
     def _pintar_fila(self, enlace: dict) -> None:
-        """Actualiza color y textos de una fila sin redibujar la lista."""
+        """Actualiza la fila si sigue a la vista. Si entra o sale del filtro, redibuja."""
+        self._pintar_resumen()
+        visible = coincide(enlace, self._filtro, self._texto_busqueda())
         info = self._filas.get(id(enlace))
-        if not info:
-            self.refrescar_lista()
+        en_pantalla = False
+        if info:
+            try:
+                en_pantalla = bool(info["punto"].winfo_exists())
+            except Exception:
+                en_pantalla = False
+        if visible and en_pantalla and info is not None:
+            titulo, detalle, color = self._presentacion(enlace)
+            info["punto"].configure(fg_color=color)
+            info["titulo"].configure(text=titulo)
+            info["detalle"].configure(text=detalle, text_color=color)
             return
-        try:
-            viva = bool(info["punto"].winfo_exists())
-        except Exception:
-            viva = False
-        if not viva:
+        if visible != en_pantalla:
             self.refrescar_lista()
-            return
-        titulo, detalle, color = self._presentacion(enlace)
-        info["punto"].configure(fg_color=color)
-        info["titulo"].configure(text=titulo)
-        info["detalle"].configure(text=detalle, text_color=color)
 
     def refrescar_lista(self) -> None:
+        conservar_foco = False
+        try:
+            conservar_foco = self.focus_get() == self.busqueda
+        except Exception:
+            conservar_foco = False
+        fraccion = 0.0
+        try:
+            fraccion = float(self.lista._parent_canvas.yview()[0])
+        except Exception:
+            fraccion = 0.0
+
         self._filas = {}
         for hijo in self.lista.winfo_children():
             hijo.destroy()
+        visibles = [
+            enlace
+            for enlace in self.enlaces
+            if isinstance(enlace, dict) and coincide(enlace, self._filtro, self._texto_busqueda())
+        ]
         if not self.enlaces:
+            mensaje = "Todavía no hay enlaces."
+        elif not visibles:
+            mensaje = "Ningún enlace coincide con la búsqueda."
+        else:
+            mensaje = ""
+        if mensaje:
             ctk.CTkLabel(
                 self.lista,
-                text="Todavía no hay enlaces.",
+                text=mensaje,
                 text_color=COLORES["secundario"],
                 font=self.fuente_url,
                 fg_color="transparent",
             ).pack(anchor="w", padx=8, pady=28)
-            return
-        for enlace in self.enlaces:
-            self._crear_fila(enlace)
+        else:
+            for enlace in visibles:
+                self._crear_fila(enlace)
+        self._pintar_resumen()
+        try:
+            self.lista._parent_canvas.yview_moveto(fraccion)
+        except Exception:
+            pass
+        if conservar_foco:
+            self.busqueda.focus_set()
 
     def abrir(self, enlace: dict) -> None:
         """Abre la URL en el navegador y, si arranca, marca el enlace como visitado."""

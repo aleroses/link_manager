@@ -213,3 +213,34 @@ Ninguno de ejecución. El reparto se comprobó con un verificador falso: 25 enla
 - Filtros, búsqueda, categorías editables, notas, CSV y contadores (fase 6).
 - Pulido y notas de PyInstaller (fase 7).
 - Crear la rama `debian` al validar en Linux.
+
+## 2026-10-17 — Fase 6A: Filtro, búsqueda y reintento
+
+### Qué se hizo
+
+La ventana filtra la lista y la busca al escribir. El menú ofrece Todos, Pendiente, Activo, Error, Caído, Visitado y No visitado. El texto se compara, sin distinguir mayúsculas, con el título, la URL, las notas y la categoría. Las dos condiciones se aplican a la vez. La barra inferior cuenta toda la colección, también lo que el filtro oculta: "12 activos, 3 caídos, 2 errores, 5 pendientes", con singular cuando el número es 1. Reintentar caídos vuelve a comprobar solo ese estado y usa el mismo grupo de 8 hilos, la misma barra y el mismo Cancelar.
+
+### Decisiones técnicas y por qué
+
+- El filtro y el texto no se guardan en el JSON. Son de la sesión. Al volver a abrir, la lista sale completa.
+- Visitado y No visitado miran el campo `visitado`, que no es un estado. Un enlace activo puede estar visitado o no.
+- El resumen incluye los errores aunque el ejemplo de partida no los citara. Si no, ese estado desaparecería del recuento.
+- Verificar todos y Reintentar caídos comparten `_iniciar_verificacion`. El botón solo elige la selección. Reintentar incluye caídos ocultos por el filtro: el botón habla del estado, no de lo que se ve.
+- Si una fila oculta recibe un resultado y sigue sin cumplir el filtro, no se redibuja la lista. Solo cambia el resumen. Si entra o sale del filtro, ahí sí se vuelve a pintar. Así un resultado no salta el scroll ni escribe el título en otra fila.
+- Si el enlace recién añadido no pasa el filtro, el aviso lo dice. Sigue guardado.
+
+### Archivos creados o modificados
+
+- `interfaz.py`
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+Ninguno de ejecución. Con un verificador falso se vio el filtro junto con el texto, el resumen en singular y con errores, el reintento limitado a los caídos, y un enlace que pasa a activo y sale de la vista sin cambiar el título del que sigue caído.
+
+### Pendientes
+
+- Editar notas y categoría, pegar varios enlaces y CSV (resto de la fase 6).
+- Pulido y notas de PyInstaller (fase 7).
+- Crear la rama `debian` al validar en Linux.
