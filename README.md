@@ -240,6 +240,8 @@ pyinstaller --noconfirm --windowed --name GestorDeEnlaces --collect-all customtk
 
 El resultado queda en `dist/GestorDeEnlaces/`. En Windows el programa es `GestorDeEnlaces.exe`. En Debian es `GestorDeEnlaces`, sin extensión. `assets/icons/` viaja dentro del paquete. `data/enlaces.json` y `data/gestor.log` se crean junto al ejecutable la primera vez que se abre, no dentro del paquete: así no se borran al volver a generarlo. Si esa carpeta no se puede escribir, los dos archivos pasan a la carpeta de configuración del usuario, la misma de la sección "Dónde se guardan los enlaces". `--windowed` no abre consola; un fallo de arranque se lee en `gestor.log`.
 
+La copia de Windows regenerada el 18 de octubre de 2026 se hizo con PyInstaller 6.22.3. La carpeta `dist/GestorDeEnlaces/` ocupa unos 47 MB sin contar `data/`, porque esa carpeta aparece al abrir el programa.
+
 `build/` y `dist/` no se versionan. `GestorDeEnlaces.spec` sí: guarda la receta del ejecutable y no contiene rutas de esta máquina.
 
 ## Licencia

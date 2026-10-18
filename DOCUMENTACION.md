@@ -558,3 +558,30 @@ Ninguno de ejecución. `python main.py --probar` terminó con 63 pruebas correct
 
 - Crear la rama `debian` al validar en Linux.
 - Generar el ejecutable en Debian con el comando del README.
+
+## 2026-10-18 — Fase 8.4: Ejecutable de Windows
+
+### Qué se hizo
+
+El `GestorDeEnlaces.exe` de las 02:06 era anterior a `assets/icons/`, a `main.py`, `interfaz.py`, `datos.py`, `verificador.py`, `registro.py` y a `LICENSE-lucide.txt`. Se regeneró desde cero con el comando del README, `--clean` y el Python del entorno del proyecto. `GestorDeEnlaces.spec` no se editó: PyInstaller lo reescribió al compilar y el contenido quedó igual que el versionado.
+
+### Decisiones técnicas y por qué
+
+- El paquete sigue siendo de una carpeta, con `--windowed`, así que no abre consola. Los iconos van en `_internal/assets/icons`. Los datos no van dentro del paquete.
+- Al primer arranque el programa crea `data/enlaces.json` y `data/gestor.log` junto al `.exe`. Después de probarlo se borró esa carpeta. El paquete entregado no la trae; vuelve a crearse sola la próxima vez que se abre.
+
+### Archivos creados o modificados
+
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+Ninguno de ejecución. El programa arrancó sin consola y `gestor.log` no registró ningún traceback. Los 61 archivos de `assets/icons/` están en el paquete: 20 SVG, 40 PNG y `LICENSE-lucide.txt`, incluidos `loader-circle-20.png` y `loader-circle-40.png`. Añadir `https://example.com` guardó el enlace, obtuvo el título y lo dejó activo. Abrir lo marcó como visitado. Copiar URL dejó esa dirección en el portapapeles y el botón mostró la marca de confirmación. Verificar categoría terminó con el aviso "Verificación terminada. 2 de 2."
+
+El ejecutable quedó con fecha 18 de octubre de 2026, 02:30. PyInstaller 6.22.3, Python 3.14.6. La carpeta `dist/GestorDeEnlaces/` ocupa 46,7 MB (1202 archivos) sin `data/`. `python main.py --probar` terminó con 63 pruebas correctas y 0 fallos. `build/` y `dist/` siguen ignorados por Git.
+
+### Pendientes
+
+- Crear la rama `debian` al validar en Linux.
+- Generar el ejecutable en Debian con el comando del README. En esta fase se regeneró el de Windows.
