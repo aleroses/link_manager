@@ -12,6 +12,7 @@ import json
 import sys
 import tempfile
 import threading
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -704,6 +705,23 @@ def probar_columnas(informe: _Comprobaciones) -> None:
         and interfaz.recortar_texto("abc", medir, 0) == "",
         "un texto que no cabe se corta con puntos suspensivos",
     )
+    pendiente = datos.enlace_nuevo("https://example.com/nuevo")
+    con_fecha = datos.enlace_nuevo("https://example.com/visto")
+    con_fecha["estado"] = "activo"
+    con_fecha["ultima_verificacion"] = "2026-10-18T12:00:00+00:00"
+    importado = datos.enlace_nuevo("https://example.com/csv")
+    importado["estado"] = "activo"
+    dia = datetime.fromisoformat("2026-10-18T12:00:00+00:00").astimezone().strftime("%d/%m/%Y")
+    informe.comprobar(
+        interfaz.texto_ultima_verificacion(pendiente) == "sin verificar"
+        and interfaz.texto_ultima_verificacion(con_fecha) == f"verificado {dia}"
+        and interfaz.texto_ultima_verificacion(importado) == ""
+        and interfaz.texto_ultima_verificacion(
+            {"estado": "pendiente", "ultima_verificacion": "no-es-fecha"}
+        )
+        == "sin verificar",
+        "la fila muestra la fecha corta o sin verificar",
+    )
 
     ctk.set_appearance_mode("dark")
     with tempfile.TemporaryDirectory() as carpeta:
@@ -812,6 +830,53 @@ def probar_columnas(informe: _Comprobaciones) -> None:
                 and app._columnas <= interfaz.MAX_COLUMNAS_TARJETAS,
                 "las tarjetas no pasan de tres columnas",
                 f"ancho={ancho} columnas={app._columnas}",
+            )
+
+            lote = app._lote
+            app._filtro = "todos"
+            app.menu_filtro.set("Todos")
+            app.busqueda.delete(0, "end")
+            app._entrar_seccion("Alfa")
+            app.update()
+            app._al_cambiar_vista("Todos los enlaces")
+            app.update()
+            app._volver_tarjetas()
+            app.update()
+            app._entrar_seccion("Alfa")
+            app.update()
+            fechas = [
+                item["texto"]
+                for item in app._recortes
+                if item["texto"] in {"sin verificar", f"verificado {dia}"}
+            ]
+            informe.comprobar(
+                app._lote == lote
+                and not app._verificacion_masiva
+                and app.boton_verificar_categoria.winfo_ismapped()
+                and "sin verificar" in fechas,
+                "entrar y salir de una categoría no inicia una verificación",
+                f"lote={app._lote} masiva={app._verificacion_masiva}",
+            )
+            app._volver_tarjetas()
+            app.update()
+            oculto = not app.boton_verificar_categoria.winfo_ismapped()
+            app._entrar_seccion("Alfa")
+            app.update()
+            pedidos: list[list] = []
+
+            def _anotar(seleccion, _aviso) -> None:
+                pedidos.append(list(seleccion))
+
+            app._iniciar_verificacion = _anotar
+            app.boton_verificar_categoria.invoke()
+            esperados = app._enlaces_de("Alfa")
+            informe.comprobar(
+                oculto
+                and app.boton_verificar_categoria.winfo_ismapped()
+                and len(pedidos) == 1
+                and pedidos[0] == esperados
+                and app._lote == lote,
+                "el botón de la cabecera verifica solo la categoría abierta",
             )
         finally:
             app._al_cerrar()

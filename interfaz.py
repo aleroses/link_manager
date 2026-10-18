@@ -160,6 +160,27 @@ def recortar_texto(texto: str, medir, ancho: int) -> str:
     return texto[:bajo] + puntos
 
 
+def texto_ultima_verificacion(enlace: dict) -> str:
+    """Fecha corta de la última comprobación.
+
+    Un pendiente sin fecha usable dice «sin verificar». Un estado
+    conocido sin fecha no añade texto: pudo llegar de un CSV.
+    """
+    cruda = str(enlace.get("ultima_verificacion") or "").strip()
+    if cruda:
+        try:
+            momento = datetime.fromisoformat(cruda)
+        except ValueError:
+            momento = None
+        if momento is not None:
+            if momento.tzinfo is None:
+                momento = momento.replace(tzinfo=timezone.utc)
+            return f"verificado {momento.astimezone().strftime('%d/%m/%Y')}"
+    if str(enlace.get("estado") or "pendiente") == "pendiente":
+        return "sin verificar"
+    return ""
+
+
 def _palabra(cantidad: int, singular: str, plural: str) -> str:
     return f"{cantidad} {singular if cantidad == 1 else plural}"
 
@@ -545,6 +566,20 @@ class Aplicacion(ctk.CTk):
             text_color=COLORES["texto_boton"],
             font=ctk.CTkFont(size=13, weight="bold"),
             command=self.nueva_categoria,
+        )
+        self.boton_verificar_categoria = ctk.CTkButton(
+            self.fila_vista,
+            text="Verificar categoría",
+            image=self.iconos["verificar"],
+            compound="left",
+            width=210,
+            height=36,
+            corner_radius=10,
+            fg_color=COLORES["acento"],
+            hover_color=COLORES["acento_hover"],
+            text_color=COLORES["texto_boton"],
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._verificar_seccion_actual,
         )
 
         self.fila_buscar = ctk.CTkFrame(barra, fg_color="transparent")
@@ -1072,9 +1107,11 @@ class Aplicacion(ctk.CTk):
             pass
         self._aplicar_vista()
         self.refrescar_lista()
-        enlaces = self._enlaces_de(nombre)
-        if enlaces:
-            self._iniciar_verificacion(enlaces, "Esta categoría no tiene enlaces.")
+
+    def _verificar_seccion_actual(self) -> None:
+        if self._seccion is None:
+            return
+        self.verificar_categoria(self._seccion)
 
     def _aplicar_vista(self) -> None:
         en_seccion = self._vista == "categorias" and self._seccion is not None
@@ -1082,6 +1119,7 @@ class Aplicacion(ctk.CTk):
             self.fila_buscar.pack_forget()
             self.boton_volver.pack_forget()
             self.titulo_seccion.pack_forget()
+            self.boton_verificar_categoria.pack_forget()
             self.boton_nueva.pack(side="right")
             return
         self.fila_buscar.pack(fill="x", padx=20, pady=(4, 0), before=self.aviso)
@@ -1090,11 +1128,13 @@ class Aplicacion(ctk.CTk):
             self.boton_volver.pack(side="left", padx=(12, 8))
             self.titulo_seccion.configure(text=self._seccion or "Sin categoría")
             self.titulo_seccion.pack(side="left")
+            self.boton_verificar_categoria.pack(side="right")
             self._etiqueta_filtro_categoria.pack_forget()
             self.menu_categoria.pack_forget()
             return
         self.boton_volver.pack_forget()
         self.titulo_seccion.pack_forget()
+        self.boton_verificar_categoria.pack_forget()
         self._etiqueta_filtro_categoria.pack(side="left", padx=(12, 8))
         self.menu_categoria.pack(side="left")
 
@@ -1977,6 +2017,7 @@ class Aplicacion(ctk.CTk):
         self.texto_progreso.configure(text=texto_progreso(0, self._total_lote))
         self.boton_cancelar.configure(state="normal")
         self.boton_verificar.configure(state="disabled", fg_color=COLORES["borde"])
+        self.boton_verificar_categoria.configure(state="disabled", fg_color=COLORES["borde"])
         self.boton_reintentar.configure(state="disabled", fg_color=COLORES["borde"])
         self.barra_progreso.grid(row=0, column=1, sticky="ew", padx=(14, 12))
         self.texto_progreso.grid(row=0, column=2, padx=(0, 12))
@@ -1987,6 +2028,7 @@ class Aplicacion(ctk.CTk):
         self.texto_progreso.grid_remove()
         self.boton_cancelar.grid_remove()
         self.boton_verificar.configure(state="normal", fg_color=COLORES["acento"])
+        self.boton_verificar_categoria.configure(state="normal", fg_color=COLORES["acento"])
         self.boton_reintentar.configure(state="normal", fg_color=COLORES["acento"])
 
     def _pintar_progreso(self) -> None:
@@ -2146,9 +2188,26 @@ class Aplicacion(ctk.CTk):
             self._actualizar_recorte(info["titulo"], titulo)
             self._actualizar_recorte(info["detalle"], detalle)
             info["detalle"].configure(text_color=color)
+            self._pintar_fecha(info.get("fecha"), texto_ultima_verificacion(enlace))
             return
         if visible != en_pantalla:
             self.refrescar_lista()
+
+    def _pintar_fecha(self, etiqueta: ctk.CTkLabel | None, texto: str) -> None:
+        """Muestra la fecha bajo el estado. Sin texto, no ocupa sitio."""
+        if etiqueta is None:
+            return
+        try:
+            if not etiqueta.winfo_exists():
+                return
+        except Exception:
+            return
+        self._actualizar_recorte(etiqueta, texto)
+        if texto:
+            if not etiqueta.winfo_ismapped():
+                etiqueta.pack(fill="x", pady=(2, 0))
+            return
+        etiqueta.pack_forget()
 
     def refrescar_lista(self) -> None:
         conservar_foco = False
@@ -2552,10 +2611,23 @@ class Aplicacion(ctk.CTk):
         )
         etiqueta_detalle.pack(fill="x", pady=(4, 0))
         self._registrar_recorte(etiqueta_detalle, detalle, self.fuente_detalle, RESERVA_TEXTO_FILA)
+        fecha = texto_ultima_verificacion(enlace)
+        etiqueta_fecha = ctk.CTkLabel(
+            textos,
+            text="",
+            anchor="w",
+            text_color=COLORES["secundario"],
+            font=self.fuente_detalle,
+            fg_color="transparent",
+        )
+        self._registrar_recorte(etiqueta_fecha, fecha, self.fuente_detalle, RESERVA_TEXTO_FILA)
+        if fecha:
+            etiqueta_fecha.pack(fill="x", pady=(2, 0))
         self._filas[id(enlace)] = {
             "punto": punto,
             "titulo": etiqueta_titulo,
             "detalle": etiqueta_detalle,
+            "fecha": etiqueta_fecha,
         }
 
         marca = ctk.CTkLabel(

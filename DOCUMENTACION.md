@@ -463,3 +463,31 @@ En Python 3.14 el lector de CSV acepta una comilla sin cerrar y no lanza `csv.Er
 
 - Crear la rama `debian` al validar en Linux.
 - Generar el ejecutable en Debian con el comando del README. En esta fase solo se probó el de Windows.
+
+## 2026-10-18 — Fase 8.1: Verificación solo a petición
+
+### Qué se hizo
+
+Entrar en una categoría muestra los estados guardados y no llama a la red. Dentro de la sección, Verificar categoría queda a la derecha de la cabecera, con el icono de refresco, y comprueba solo los enlaces de esa categoría. El botón de la tarjeta sigue igual. Cada fila muestra `verificado 18/10/2026`, o `sin verificar` si está pendiente y no tiene fecha.
+
+### Decisiones técnicas y por qué
+
+- Se quitó la llamada a `_iniciar_verificacion` de `_entrar_seccion`. Cambiar a Todos los enlaces, volver a las tarjetas y refrescar la lista tampoco comprueban. Siguen a petición: añadir, pegar varios, importar CSV (solo los nuevos), Verificar todos, Reintentar caídos, los dos botones de Verificar categoría y Obtener título de nuevo.
+- El botón de la cabecera usa `verificar_categoria`, la misma barra, el contador, Cancelar y el grupo de 8 hilos. Se empaqueta solo dentro de la sección y se desactiva mientras hay una tanda, igual que Verificar todos.
+- `texto_ultima_verificacion` formatea la fecha ISO en hora local, día/mes/año. Una fecha ilegible no rompe la fila: un pendiente queda en `sin verificar` y un estado conocido sin fecha, como el de un CSV, no añade la línea. El texto va bajo el estado y pasa por el recorte de la fila, así los botones no se desplazan.
+
+### Archivos creados o modificados
+
+- `interfaz.py`
+- `main.py`
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+Ninguno de ejecución. `python main.py --probar` terminó con 61 pruebas correctas y 0 fallos: la fecha corta, una ventana que entra y sale de una categoría sin iniciar una tanda, y el botón de la cabecera limitado a los enlaces de esa sección.
+
+### Pendientes
+
+- Crear la rama `debian` al validar en Linux.
+- Generar el ejecutable en Debian con el comando del README. En la fase 8 solo se probó el de Windows.
