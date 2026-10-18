@@ -1,3 +1,4 @@
+# Gestor de Enlaces. Licencia GPL-3.0. El texto está en LICENSE.
 """Comprueba si una URL responde y clasifica el resultado.
 
 Estados devueltos:

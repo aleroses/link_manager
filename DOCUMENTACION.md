@@ -524,3 +524,37 @@ Ninguno de ejecución. `python main.py --probar` terminó con 63 pruebas correct
 
 - Crear la rama `debian` al validar en Linux.
 - Generar el ejecutable en Debian con el comando del README. En esta fase se regeneró el de Windows.
+
+## 2026-10-18 — Fase 8.3: Licencia y avisos de terceros
+
+### Qué se hizo
+
+El programa ya tenía `LICENSE` (GPL-3.0) en `master` y, desde el commit de la licencia, también en `windows`. Faltaban el aviso en el README, el texto ISC de Lucide, el encabezado en los módulos y un `.gitignore` que cubriera los registros. Eso queda escrito. `GestorDeEnlaces.spec` pasa a versionarse.
+
+### Decisiones técnicas y por qué
+
+- La licencia del proyecto es la GPL-3.0 del archivo `LICENSE`. Cada `.py` abre con una línea que remite a ese archivo. No se añade un titular de copyright que el archivo no trae.
+- Las licencias de terceros se leyeron de la instalación, no de memoria. CustomTkinter 6.0.0 declara CC0 en el campo de PyPI y MIT en el clasificador; el `LICENSE` de la rueda es MIT, copyright 2023 Tom Schimansky, y es el que se cita. requests 2.34.2 es Apache-2.0. Pillow 12.3.0 es MIT-CMU. Lucide 0.469.0 es ISC; el texto se copió de `https://github.com/lucide-icons/lucide/blob/0.469.0/LICENSE` a `assets/icons/LICENSE-lucide.txt`. MIT, MIT-CMU, ISC y Apache-2.0 se pueden combinar con la GPL-3.0.
+- `.gitignore` ya cubría `venv/`, `__pycache__/`, `data/`, `build/`, `dist/`, `*.bak` y el `enlaces.json` de la raíz. Se añade `*.log`. Se quita `*.spec`: el archivo de PyInstaller solo usa rutas relativas (`main.py` y `assets/icons`) y conviene que el ejecutable se pueda repetir.
+
+### Archivos creados o modificados
+
+- `README.md`
+- `DOCUMENTACION.md`
+- `.gitignore`
+- `assets/icons/LICENSE-lucide.txt`
+- `GestorDeEnlaces.spec`
+- `main.py`
+- `interfaz.py`
+- `datos.py`
+- `verificador.py`
+- `registro.py`
+
+### Problemas encontrados y cómo se resolvieron
+
+Ninguno de ejecución. `python main.py --probar` terminó con 63 pruebas correctas y 0 fallos. El encabezado no cambia el comportamiento.
+
+### Pendientes
+
+- Crear la rama `debian` al validar en Linux.
+- Generar el ejecutable en Debian con el comando del README.

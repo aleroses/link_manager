@@ -1,3 +1,4 @@
+# Gestor de Enlaces. Licencia GPL-3.0. El texto está en LICENSE.
 """Ventana del Gestor de Enlaces.
 
 Tema oscuro, campo para añadir una URL y lista con el estado de cada

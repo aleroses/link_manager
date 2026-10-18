@@ -4,6 +4,6 @@ enlaces.json
 data/
 *.bak
 *.tmp
+*.log
 build/
 dist/
-*.spec

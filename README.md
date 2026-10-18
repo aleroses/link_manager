@@ -100,7 +100,9 @@ link_manager/
   README.md           Esta guía
   DOCUMENTACION.md    Diario de decisiones por fase
   .gitignore
-  assets/icons/       SVG Lucide y PNG a 20 px y 40 px
+  assets/icons/       SVG Lucide, PNG a 20 px y 40 px, y LICENSE-lucide.txt
+  GestorDeEnlaces.spec  Receta de PyInstaller; sí se versiona
+  LICENSE             GPL-3.0
   data/               enlaces.json y gestor.log; no se versiona
   venv/               Entorno local; no se versiona
 ```
@@ -238,4 +240,17 @@ pyinstaller --noconfirm --windowed --name GestorDeEnlaces --collect-all customtk
 
 El resultado queda en `dist/GestorDeEnlaces/`. En Windows el programa es `GestorDeEnlaces.exe`. En Debian es `GestorDeEnlaces`, sin extensión. `assets/icons/` viaja dentro del paquete. `data/enlaces.json` y `data/gestor.log` se crean junto al ejecutable la primera vez que se abre, no dentro del paquete: así no se borran al volver a generarlo. Si esa carpeta no se puede escribir, los dos archivos pasan a la carpeta de configuración del usuario, la misma de la sección "Dónde se guardan los enlaces". `--windowed` no abre consola; un fallo de arranque se lee en `gestor.log`.
 
-`build/`, `dist/` y el archivo `.spec` no se versionan.
+`build/` y `dist/` no se versionan. `GestorDeEnlaces.spec` sí: guarda la receta del ejecutable y no contiene rutas de esta máquina.
+
+## Licencia
+
+Gestor de Enlaces se publica bajo la [GPL-3.0](LICENSE). El texto completo está en ese archivo. Cada módulo `.py` lleva un encabezado que remite a él.
+
+## Créditos y licencias de terceros
+
+Estas licencias se comprobaron en los archivos que instala `pip` y, para Lucide, en la etiqueta 0.469.0 del repositorio. Las cuatro se pueden combinar con la GPL-3.0: son permisivas, o en el caso de Apache-2.0 la Free Software Foundation la considera compatible con la GPL-3.0.
+
+- CustomTkinter 6.0.0, de Tom Schimansky. El archivo `LICENSE` de la rueda es MIT (copyright 2023). En PyPI el campo de licencia dice CC0 y el clasificador dice MIT; manda el texto que viaja con el paquete, que es MIT. https://github.com/TomSchimansky/CustomTkinter
+- requests 2.34.2, de Python Software Foundation. Apache-2.0. https://github.com/psf/requests
+- Pillow 12.3.0. MIT-CMU, la licencia histórica de PIL: copyright 1997-2011 Secret Labs AB, 1995-2011 Fredrik Lundh, y desde 2010 Jeffrey A. Clark y colaboradores. https://github.com/python-pillow/Pillow
+- Iconos Lucide 0.469.0. ISC. Parte del copyright (2013-2022) es de Cole Bemis, por Feather (MIT); el resto (2022) es de Lucide Contributors. El aviso está en `assets/icons/LICENSE-lucide.txt`. https://github.com/lucide-icons/lucide/blob/0.469.0/LICENSE
