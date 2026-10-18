@@ -64,11 +64,11 @@ En Debian el comando es el mismo (`python main.py`) después de `source venv/bin
 
 Se abre la ventana "Gestor de Enlaces". Pega una dirección en el campo y pulsa Añadir (o Enter). El enlace aparece al momento como pendiente y, unos segundos después, cambia de color cuando termina la comprobación. La ventana sigue respondiendo mientras tanto.
 
-En cada fila hay tres botones de icono: Abrir (también vale el doble clic sobre el texto), Copiar URL y Eliminar. Abrir lanza el navegador predeterminado y marca el enlace como visitado. Copiar cambia el icono a una marca de verificación durante un segundo. Eliminar pide confirmación. Si pegas el mismo enlace con otra forma (`example.com` y `https://example.com/`), la aplicación avisa y no lo añade otra vez.
+En cada fila hay cuatro botones de icono: Editar, Abrir (también vale el doble clic sobre el texto), Copiar URL y Eliminar. Editar cambia la categoría y las notas. Abrir lanza el navegador predeterminado y marca el enlace como visitado. Copiar cambia el icono a una marca de verificación durante un segundo. Eliminar pide confirmación. Si pegas el mismo enlace con otra forma (`example.com` y `https://example.com/`), la aplicación avisa y no lo añade otra vez. Si pegas varias líneas, cada línea es un enlace: las vacías se saltan, las que no son http o https se cuentan y las repetidas no se guardan.
 
 El botón Verificar todos comprueba la lista entera, también los enlaces que el filtro oculta. Aparecen una barra, el texto "8 de 25 (32%)" y el botón Cancelar. Como máximo hay 8 comprobaciones a la vez, y se puede seguir usando la ventana. Cancelar no corta lo que ya salió a la red: eso termina y se anota. El resto no se inicia.
 
-Debajo hay un buscador y un menú de filtro. El buscador mira título, URL, notas y categoría en cada tecla, sin distinguir mayúsculas. El menú deja ver todos, un estado (pendiente, activo, error o caído) o si el enlace está visitado. Las dos cosas se aplican a la vez. La barra inferior cuenta toda la colección, por ejemplo "12 activos, 3 caídos, 2 errores, 5 pendientes". Reintentar caídos vuelve a comprobar solo los que están caídos, aunque el filtro los esté ocultando.
+Debajo hay un buscador y dos menús. El buscador mira título, URL, notas y categoría en cada tecla, sin distinguir mayúsculas. El primer menú deja ver todos, un estado (pendiente, activo, error o caído) o si el enlace está visitado. El segundo filtra por categoría: Todas, Sin categoría o una de las que ya hay. Las tres condiciones se aplican a la vez. La barra inferior cuenta toda la colección, por ejemplo "12 activos, 3 caídos, 2 errores, 5 pendientes". Ahí también están Importar, Exportar y Reintentar caídos. Exportar escribe un CSV con todos los enlaces, no solo los que se ven. Importar añade los nuevos y no borra ni pisa los que ya estaban.
 
 Sin activar el entorno:
 
@@ -89,7 +89,7 @@ En Debian, el mismo comando con el entorno activado. Escribe líneas `OK` o `FAL
 link_manager/
   main.py             Abre la ventana; con --probar lanza las pruebas
   interfaz.py         Ventana oscura, lista, filtro y resumen
-  datos.py            Carga y guardado de enlaces.json
+  datos.py            Carga y guardado de enlaces.json y CSV
   verificador.py      Normalización de URL y comprobación HTTP
   requirements.txt    Dependencias con versión fijada
   README.md           Esta guía
@@ -123,19 +123,20 @@ Hasta esta fase:
 - Verificar una URL con tiempo límite de 8 segundos: primero HEAD y, si falla, GET. El título se lee del HTML cuando la petición es GET.
 - Ventana oscura y redimensionable, con iconos Lucide.
 - Campo de URL y botón Añadir. El enlace se guarda al momento y se verifica en segundo plano, sin congelar la ventana.
-- Lista con un punto de color: verde activo, rojo caído, naranja error, gris pendiente.
+- Lista con un punto de color: verde activo, rojo caído, naranja error, gris pendiente. Si hay notas, se ve la primera línea.
+- Editar la categoría y las notas de un enlace.
 - Abrir el enlace en el navegador predeterminado, con el botón o con doble clic. Al abrirlo queda marcado como visitado.
 - Copiar la URL al portapapeles. El icono del botón pasa a una marca de verificación durante un segundo.
 - Eliminar un enlace, con confirmación.
 - Avisar si el enlace ya está en la lista, aunque cambie el esquema, las mayúsculas, la barra final o el fragmento `#...`.
+- Pegar varios enlaces de una vez, uno por línea.
 - Verificar todos los enlaces, con un máximo de 8 comprobaciones a la vez. El filtro no reduce esa tanda.
 - Barra de progreso, contador "8 de 25 (32%)" y botón Cancelar. Los resultados solo se pintan en el hilo principal.
 - Buscar por título, URL, notas o categoría, al escribir, sin distinguir mayúsculas.
-- Filtrar por todos, pendiente, activo, error, caído, visitado o no visitado. El filtro y el texto se aplican a la vez.
+- Filtrar por estado y, a la vez, por categoría (Todas, Sin categoría o una de las guardadas).
 - Resumen fijo de toda la colección: "12 activos, 3 caídos, 2 errores, 5 pendientes".
 - Reintentar caídos, con el mismo tope de 8 comprobaciones y la misma barra de progreso.
-
-Todavía no se pueden editar notas ni categoría. Tampoco hay pegado de varios enlaces a la vez ni exportación.
+- Importar y exportar CSV. Exportar incluye toda la colección. Importar añade los nuevos y se salta los repetidos.
 
 ## Ramas
 
@@ -165,6 +166,8 @@ git checkout windows
 
 **Verificar todos tarda o parece parado.** Cada enlace espera como máximo 8 segundos, y solo 8 van a la vez. Con 25 enlaces lentos puede acercarse al medio minuto. Cancelar deja terminar los que ya empezaron (nunca más de 8) y no inicia los demás.
 
-**Un enlace no aparece después de añadirlo.** El filtro o el buscador lo está ocultando. Elige Todos y borra el texto de búsqueda. El enlace sigue guardado: la barra inferior cuenta toda la colección, no solo las filas visibles.
+**Un enlace no aparece después de añadirlo.** El filtro o el buscador lo está ocultando. Elige Todos y Todas, y borra el texto de búsqueda. El enlace sigue guardado: la barra inferior cuenta toda la colección, no solo las filas visibles.
+
+**Excel muestra símbolos raros en el CSV.** Exporta otra vez desde la aplicación. El archivo va en UTF-8 con BOM para que Excel lea las tildes. Si el CSV no tiene una columna `url`, la importación no cambia la lista.
 
 **Aparece un archivo `.bak`.** El JSON no se pudo leer. La copia conserva el contenido anterior. El archivo de trabajo se reescribe como lista vacía para que el programa pueda seguir. No borres el `.bak` hasta recuperar lo que te interese.

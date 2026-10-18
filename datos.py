@@ -7,6 +7,7 @@ configuración del usuario.
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 import shutil
@@ -161,3 +162,111 @@ def guardar_enlaces(enlaces: list, ruta: Path | None = None) -> None:
         except OSError:
             pass
         raise
+
+
+COLUMNAS_CSV = (
+    "url",
+    "titulo",
+    "estado",
+    "codigo_http",
+    "visitado",
+    "categoria",
+    "notas",
+    "fecha_añadido",
+    "ultima_verificacion",
+)
+ESTADOS_CONOCIDOS = {"pendiente", "activo", "error", "caído"}
+_VISITADO_SI = {"si", "sí", "true", "1"}
+
+
+def _texto_visitado(valor: object) -> str:
+    return "si" if bool(valor) else "no"
+
+
+def _leer_visitado(valor: str) -> bool:
+    return valor.strip().casefold() in _VISITADO_SI
+
+
+def _leer_codigo(valor: str) -> int | None:
+    limpio = valor.strip()
+    if not limpio:
+        return None
+    try:
+        return int(limpio)
+    except ValueError:
+        return None
+
+
+def escribir_csv(enlaces: list, ruta: Path) -> None:
+    """Escribe la colección en UTF-8 con BOM. visitado queda en si o no."""
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    with ruta.open("w", encoding="utf-8-sig", newline="") as archivo:
+        escritor = csv.DictWriter(
+            archivo,
+            fieldnames=COLUMNAS_CSV,
+            extrasaction="ignore",
+            lineterminator="\n",
+        )
+        escritor.writeheader()
+        for enlace in enlaces:
+            if not isinstance(enlace, dict):
+                continue
+            codigo = enlace.get("codigo_http")
+            ultima = enlace.get("ultima_verificacion")
+            escritor.writerow(
+                {
+                    "url": enlace.get("url") or "",
+                    "titulo": enlace.get("titulo") or "",
+                    "estado": enlace.get("estado") or "",
+                    "codigo_http": "" if codigo is None else codigo,
+                    "visitado": _texto_visitado(enlace.get("visitado")),
+                    "categoria": enlace.get("categoria") or "",
+                    "notas": enlace.get("notas") or "",
+                    "fecha_añadido": enlace.get("fecha_añadido") or "",
+                    "ultima_verificacion": "" if not ultima else ultima,
+                }
+            )
+
+
+def leer_csv(ruta: Path) -> tuple[list[dict], int, list[dict]]:
+    """Lee enlaces de un CSV.
+
+    Devuelve (enlaces, filas_sin_url, por_verificar). por_verificar son
+    los mismos dicts cuyo estado no era conocido: quedan en pendiente
+    para que la ventana los compruebe. Lanza ValueError si falta la
+    columna url.
+    """
+    with ruta.open("r", encoding="utf-8-sig", newline="") as archivo:
+        lector = csv.DictReader(archivo)
+        nombres = [str(nombre or "").strip() for nombre in (lector.fieldnames or [])]
+        if "url" not in nombres:
+            raise ValueError("el CSV no tiene la columna url")
+        enlaces: list[dict] = []
+        sin_url = 0
+        por_verificar: list[dict] = []
+        for fila in lector:
+            if not fila or not any(str(valor or "").strip() for valor in fila.values()):
+                continue
+            url = str(fila.get("url") or "").strip()
+            if not url:
+                sin_url += 1
+                continue
+            enlace = enlace_nuevo(url)
+            enlace["titulo"] = str(fila.get("titulo") or "")
+            enlace["categoria"] = str(fila.get("categoria") or "").strip()
+            enlace["notas"] = str(fila.get("notas") or "")
+            estado = str(fila.get("estado") or "").strip()
+            if estado in ESTADOS_CONOCIDOS:
+                enlace["estado"] = estado
+            else:
+                enlace["estado"] = "pendiente"
+                por_verificar.append(enlace)
+            enlace["codigo_http"] = _leer_codigo(str(fila.get("codigo_http") or ""))
+            enlace["visitado"] = _leer_visitado(str(fila.get("visitado") or ""))
+            fecha = str(fila.get("fecha_añadido") or "").strip()
+            if fecha:
+                enlace["fecha_añadido"] = fecha
+            ultima = str(fila.get("ultima_verificacion") or "").strip()
+            enlace["ultima_verificacion"] = ultima or None
+            enlaces.append(enlace)
+    return enlaces, sin_url, por_verificar

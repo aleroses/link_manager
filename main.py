@@ -138,6 +138,76 @@ def probar_persistencia(informe: _Comprobaciones) -> None:
         )
 
 
+def probar_csv(informe: _Comprobaciones) -> None:
+    with tempfile.TemporaryDirectory() as carpeta:
+        ruta = Path(carpeta) / "enlaces.csv"
+        enlace = datos.enlace_nuevo("https://example.com/cañón")
+        enlace["titulo"] = "Cañón"
+        enlace["notas"] = "línea uno\nlínea dos"
+        enlace["estado"] = "caído"
+        enlace["categoria"] = "lectura"
+        enlace["visitado"] = True
+        enlace["codigo_http"] = 200
+        datos.escribir_csv([enlace], ruta)
+        crudo = ruta.read_bytes()
+        leidos, sin_url, por_verificar = datos.leer_csv(ruta)
+        informe.comprobar(
+            crudo.startswith(b"\xef\xbb\xbf")
+            and len(leidos) == 1
+            and sin_url == 0
+            and por_verificar == []
+            and leidos[0]["url"] == "https://example.com/cañón"
+            and leidos[0]["titulo"] == "Cañón"
+            and leidos[0]["notas"] == "línea uno\nlínea dos"
+            and leidos[0]["estado"] == "caído"
+            and leidos[0]["categoria"] == "lectura"
+            and leidos[0]["visitado"] is True
+            and leidos[0]["codigo_http"] == 200,
+            "el CSV conserva tildes, notas en varias líneas y visitado",
+        )
+
+        ruta.write_text(
+            "url,titulo\n,sin destino\nhttps://ok.test,Bien\n",
+            encoding="utf-8-sig",
+        )
+        leidos, sin_url, _por_verificar = datos.leer_csv(ruta)
+        informe.comprobar(
+            sin_url == 1 and len(leidos) == 1 and leidos[0]["url"] == "https://ok.test",
+            "una fila sin URL se omite",
+        )
+
+        ruta.write_text(
+            "url,estado,visitado\n"
+            "https://a.test,raro,true\n"
+            "https://b.test,activo,false\n"
+            "https://c.test,pendiente,1\n"
+            "https://d.test,error,0\n",
+            encoding="utf-8-sig",
+        )
+        leidos, _sin_url, por_verificar = datos.leer_csv(ruta)
+        informe.comprobar(
+            leidos[0]["estado"] == "pendiente"
+            and leidos[0]["visitado"] is True
+            and por_verificar == [leidos[0]]
+            and leidos[1]["estado"] == "activo"
+            and leidos[1]["visitado"] is False
+            and leidos[2]["estado"] == "pendiente"
+            and leidos[2]["visitado"] is True
+            and leidos[2] not in por_verificar
+            and leidos[3]["visitado"] is False
+            and leidos[3]["estado"] == "error",
+            "un estado desconocido queda pendiente y visitado acepta true, false, 1 y 0",
+        )
+
+        ruta.write_text("titulo\nhola\n", encoding="utf-8-sig")
+        try:
+            datos.leer_csv(ruta)
+        except ValueError:
+            informe.comprobar(True, "un CSV sin columna url se rechaza")
+        else:
+            informe.comprobar(False, "un CSV sin columna url se rechaza")
+
+
 def probar_normalizacion(informe: _Comprobaciones) -> None:
     informe.comprobar(
         verificador.normalizar_url("  example.com/ruta  ") == "https://example.com/ruta",
@@ -235,6 +305,8 @@ def main() -> int:
     informe = _Comprobaciones()
     print("Persistencia")
     probar_persistencia(informe)
+    print("CSV")
+    probar_csv(informe)
     print("Normalización")
     probar_normalizacion(informe)
     print("Título")

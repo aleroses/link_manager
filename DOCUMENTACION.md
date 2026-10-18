@@ -244,3 +244,34 @@ Ninguno de ejecución. Con un verificador falso se vio el filtro junto con el te
 - Editar notas y categoría, pegar varios enlaces y CSV (resto de la fase 6).
 - Pulido y notas de PyInstaller (fase 7).
 - Crear la rama `debian` al validar en Linux.
+
+## 2026-10-17 — Fase 6B: Categorías, notas, pegado y CSV
+
+### Qué se hizo
+
+Cada fila se puede editar: categoría y notas, sin tocar la URL ni el estado. Si hay notas, la primera línea se ve en la fila. Un segundo menú filtra por Todas, Sin categoría o una categoría ya guardada, junto con el filtro de estado y el buscador. Pegar varias líneas añade un enlace por línea. Importar y Exportar leen y escriben un CSV con las columnas del registro.
+
+### Decisiones técnicas y por qué
+
+- El CSV vive en `datos.py`. Así `python main.py --probar` lo comprueba sin abrir Tk. Va en UTF-8 con BOM: Excel en Windows enseña bien `cañón` y `caído`. `visitado` se escribe `si` o `no`; al leer también valen `true`, `false`, `1` y `0`.
+- Importar une por la misma clave que los duplicados. No borra ni reescribe un enlace que ya está. Si el estado del archivo no es pendiente, activo, error o caído, queda pendiente y se verifica. Un estado válido se conserva y no sale a la red.
+- El campo de arriba sigue siendo de una línea. Solo un pegado con varias líneas se reparte. Una línea sola entra en el campo, como antes.
+- Todas y Sin categoría son opciones fijas del menú. El resto sale de las categorías guardadas, sin distinguir mayúsculas: se muestra la primera forma. Si la categoría elegida desaparece, el menú vuelve a Todas.
+- Editar guarda una sola vez y vuelve a pintar la lista. La verificación en segundo plano no cambia notas ni categoría.
+
+### Archivos creados o modificados
+
+- `datos.py`
+- `main.py`
+- `interfaz.py`
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+Ninguno de ejecución. La consola cubre el ida y vuelta con tildes, una fila sin URL y un estado desconocido. La ventana cubre el filtro de categoría, el guardado de notas, el pegado de tres líneas y un import que no pisa un enlace ya guardado.
+
+### Pendientes
+
+- Pulido y notas de PyInstaller (fase 7).
+- Crear la rama `debian` al validar en Linux.
