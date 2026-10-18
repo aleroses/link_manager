@@ -345,3 +345,40 @@ Ninguno de ejecución. `python main.py --probar` terminó con 43 pruebas correct
 
 - Resto del pulido y notas de PyInstaller (fase 7).
 - Crear la rama `debian` al validar en Linux.
+
+## 2026-10-18 — Fase 7B.1: Categoría al añadir y carpeta de datos
+
+### Qué se hizo
+
+Junto al campo de URL hay un menú Categoría. Lista Sin categoría, las categorías guardadas y Nueva categoría..., que abre el diálogo de creación y deja seleccionada la nueva. Dentro de una sección el menú viene con esa. En las tarjetas y en Todos los enlaces viene en Sin categoría. Añadir y el pegado múltiple guardan los enlaces nuevos en la categoría elegida. Los duplicados siguen sin guardarse.
+
+`enlaces.json` pasa a `data/enlaces.json`. La carpeta se crea si no existe. Si `data/` no se puede escribir, el archivo sigue yendo a la carpeta de configuración del usuario. Un `enlaces.json` antiguo en la raíz no se migra ni se borra: la consola avisa que se ignora.
+
+### Decisiones técnicas y por qué
+
+- El menú de alta y el filtro de Todos los enlaces son controles distintos. Cambiar la categoría del alta no cambia el filtro. La vista solo fija el valor por defecto al entrar o salir. Un cambio manual se conserva hasta el siguiente cambio de vista.
+- Nueva categoría... reutiliza el diálogo de las tarjetas. Al elegirla, el menú vuelve enseguida a la selección anterior, porque CustomTkinter cambia el texto antes de avisar. Si se cancela, esa selección sigue. Si se guarda, el menú queda en la categoría nueva. El diálogo Editar no cambia: sigue con el campo inline y el texto Nueva categoría.
+- `Nueva categoría...` queda reservado, igual que Sin categoría, Todas y Nueva categoría, para que el nombre de la acción no pueda ser una categoría.
+- `nuevos_enlaces` vive en `datos.py` y es lo que usan el botón Añadir y el pegado. Normaliza, cuenta inválidos y repetidos (también el repetido dentro del mismo pegado) y no modifica la colección ni crea categorías. Así la prueba no abre Tk. Importar CSV no pasa por esa función: sigue creando las categorías que falten en el archivo.
+- La ruta de trabajo es `data/enlaces.json`. `ruta_datos` crea la carpeta y comprueba que se puede escribir, pero no crea el JSON: eso lo sigue haciendo `cargar_enlaces`. La escritura atómica y el `.bak` quedan junto al archivo que esté en uso.
+- Si la carpeta del proyecto no admite `data/`, el destino sigue siendo `%APPDATA%\GestorDeEnlaces\enlaces.json` en Windows y `$XDG_CONFIG_HOME/gestor-de-enlaces/enlaces.json` (o `~/.config/gestor-de-enlaces/enlaces.json`) en el resto.
+- No hay migración. El `enlaces.json` de la raíz puede ser de prueba o de una versión anterior. Copiarlo solo podría mezclar una lista antigua con el documento version 2. Se deja en su sitio y `ruta_datos` escribe en stderr que se ignora.
+- `.gitignore` ignora `data/` entera. La línea `enlaces.json` se queda para el archivo viejo de la raíz. `*.bak` y `*.tmp` siguen cubriendo copias fuera de `data/`.
+
+### Archivos creados o modificados
+
+- `datos.py`
+- `interfaz.py`
+- `main.py`
+- `.gitignore`
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+Ninguno de ejecución. `python main.py --probar` terminó con 47 pruebas correctas y 0 fallos: la ruta `data/enlaces.json`, el aviso del JSON de la raíz, el respaldo en la carpeta de configuración y el alta con categoría, duplicados e inválidos. Una ventana abierta sobre un archivo temporal mostró el menú en Sin categoría, lo actualizó al crear Lectura, lo preseleccionó al entrar en esa sección y lo devolvió a Sin categoría al pasar a Todos los enlaces y al volver a las tarjetas.
+
+### Pendientes
+
+- Resto del pulido y notas de PyInstaller (fase 7).
+- Crear la rama `debian` al validar en Linux.

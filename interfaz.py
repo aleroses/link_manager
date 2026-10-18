@@ -98,6 +98,8 @@ FILTROS = (
     ("No visitado", "no_visitado"),
 )
 _CLAVE_FILTRO = {etiqueta: clave for etiqueta, clave in FILTROS}
+ETIQUETA_SIN_CATEGORIA = "Sin categoría"
+ETIQUETA_NUEVA_ALTA = "Nueva categoría..."
 
 
 def _palabra(cantidad: int, singular: str, plural: str) -> str:
@@ -248,6 +250,7 @@ class Aplicacion(ctk.CTk):
         self._after_ocultar: str | None = None
         self._filtro = "todos"
         self._filtro_categoria = "todas"
+        self._categoria_alta = ETIQUETA_SIN_CATEGORIA
         self.fuente_titulo = ctk.CTkFont(size=15, weight="bold")
         self.fuente_url = ctk.CTkFont(size=13)
         self.fuente_detalle = ctk.CTkFont(size=12)
@@ -296,6 +299,32 @@ class Aplicacion(ctk.CTk):
         self.entrada.pack(side="left", fill="x", expand=True, padx=(0, 12))
         self.entrada.bind("<Return>", lambda _evento: self.anadir())
         self.entrada.bind("<<Paste>>", self._al_pegar)
+
+        ctk.CTkLabel(
+            interior,
+            text="Categoría",
+            text_color=COLORES["texto"],
+            font=self.fuente_url,
+        ).pack(side="left", padx=(0, 8))
+        self.menu_alta = ctk.CTkOptionMenu(
+            interior,
+            values=[ETIQUETA_SIN_CATEGORIA, ETIQUETA_NUEVA_ALTA],
+            command=self._al_elegir_categoria_alta,
+            width=210,
+            height=42,
+            corner_radius=10,
+            fg_color=COLORES["fondo"],
+            button_color=COLORES["borde"],
+            button_hover_color=COLORES["acento"],
+            dropdown_fg_color=COLORES["barra"],
+            dropdown_hover_color=COLORES["borde"],
+            dropdown_text_color=COLORES["texto"],
+            text_color=COLORES["texto"],
+            font=self.fuente_url,
+            dropdown_font=self.fuente_detalle,
+        )
+        self.menu_alta.pack(side="left", padx=(0, 12))
+        self.menu_alta.set(ETIQUETA_SIN_CATEGORIA)
 
         self.boton_anadir = ctk.CTkButton(
             interior,
@@ -568,19 +597,21 @@ class Aplicacion(ctk.CTk):
 
     def anadir(self) -> None:
         """Normaliza la URL, rechaza duplicados y verifica en segundo plano."""
-        try:
-            url = verificador.normalizar_url(self.entrada.get())
-        except ValueError:
+        nuevos, repetidos, invalidos = datos.nuevos_enlaces(
+            [self.entrada.get()],
+            self.enlaces,
+            self.coleccion,
+            self._categoria_alta,
+        )
+        if invalidos or (not nuevos and not repetidos):
             self.aviso.configure(text="Ese enlace no es válido. Usa una dirección http o https.")
             return
-
-        if self._es_duplicado(url):
+        if not nuevos:
             self.aviso.configure(text="Ese enlace ya está en la lista.")
             return
 
         self.aviso.configure(text="")
-        enlace = datos.enlace_nuevo(url)
-        enlace["categoria"] = self._categoria_para_alta()
+        enlace = nuevos[0]
         self.enlaces.append(enlace)
         try:
             self._guardar()
@@ -591,9 +622,10 @@ class Aplicacion(ctk.CTk):
 
         self.entrada.delete(0, "end")
         self.refrescar_lista()
-        self._enviar_verificacion(enlace, url, lote=None, cancelar=None)
+        self._enviar_verificacion(enlace, str(enlace.get("url") or ""), lote=None, cancelar=None)
         if self._mostrando_tarjetas():
-            self.aviso.configure(text="Enlace añadido en Sin categoría.")
+            destino = str(enlace.get("categoria") or "").strip() or ETIQUETA_SIN_CATEGORIA
+            self.aviso.configure(text=f"Enlace añadido en {destino}.")
         elif not coincide(
             enlace,
             self._filtro,
@@ -601,16 +633,6 @@ class Aplicacion(ctk.CTk):
             self._categoria_consulta(),
         ):
             self.aviso.configure(text="Enlace añadido. No coincide con el filtro actual.")
-
-    def _es_duplicado(self, url: str) -> bool:
-        clave = verificador.clave_url(url)
-        for existente in self.enlaces:
-            try:
-                if verificador.clave_url(str(existente.get("url") or "")) == clave:
-                    return True
-            except ValueError:
-                continue
-        return False
 
     def _enviar_verificacion(
         self,
@@ -773,24 +795,12 @@ class Aplicacion(ctk.CTk):
         return "break"
 
     def _anadir_varias(self, lineas: list[str]) -> None:
-        nuevos: list[dict] = []
-        repetidos = 0
-        invalidos = 0
-        claves = self._claves_conocidas()
-        for linea in lineas:
-            try:
-                url = verificador.normalizar_url(linea)
-                clave = verificador.clave_url(url)
-            except ValueError:
-                invalidos += 1
-                continue
-            if clave in claves:
-                repetidos += 1
-                continue
-            claves.add(clave)
-            enlace = datos.enlace_nuevo(url)
-            enlace["categoria"] = self._categoria_para_alta()
-            nuevos.append(enlace)
+        nuevos, repetidos, invalidos = datos.nuevos_enlaces(
+            lineas,
+            self.enlaces,
+            self.coleccion,
+            self._categoria_alta,
+        )
         self._incorporar(nuevos, repetidos, invalidos, 0, importacion=False)
 
     def _claves_conocidas(self) -> set[str]:
@@ -852,16 +862,54 @@ class Aplicacion(ctk.CTk):
                 aviso = f"{aviso} No se ven con el filtro actual."
             elif len(visibles) < len(nuevos):
                 aviso = f"{aviso} Algunos no se ven con el filtro actual."
+            if not importacion and self._mostrando_tarjetas():
+                destino = str(nuevos[0].get("categoria") or "").strip() or ETIQUETA_SIN_CATEGORIA
+                aviso = f"{aviso} Quedan en {destino}."
         self.aviso.configure(text=aviso)
 
     def _mostrando_tarjetas(self) -> bool:
         return self._vista == "categorias" and self._seccion is None
 
-    def _categoria_para_alta(self) -> str:
-        """Categoría de un enlace nuevo. Dentro de una sección, esa; si no, ninguna."""
-        if self._vista == "categorias" and self._seccion:
-            return self._seccion
-        return ""
+    def _fijar_categoria_alta_por_vista(self) -> None:
+        """La vista pone el valor por defecto. Un cambio manual se conserva hasta salir."""
+        if self._vista == "categorias" and self._seccion is not None:
+            self._categoria_alta = self._seccion or ETIQUETA_SIN_CATEGORIA
+            return
+        self._categoria_alta = ETIQUETA_SIN_CATEGORIA
+
+    def _al_elegir_categoria_alta(self, valor: str) -> None:
+        if valor != ETIQUETA_NUEVA_ALTA:
+            self._categoria_alta = valor
+            return
+        anterior = self._categoria_alta
+        self.menu_alta.set(anterior)
+
+        def aplicar(texto: str) -> str | None:
+            error = self._crear_desde_dialogo(texto)
+            if error:
+                return error
+            ficha = datos.buscar_categoria(self.coleccion, texto)
+            if ficha is not None:
+                self._categoria_alta = str(ficha.get("nombre") or texto.strip())
+            else:
+                self._categoria_alta = texto.strip()
+            return None
+
+        self._pedir_nombre("Nueva categoría", "", aplicar)
+
+    def _rehacer_menu_alta(self) -> None:
+        opciones = [ETIQUETA_SIN_CATEGORIA, *self._nombres_categoria(), ETIQUETA_NUEVA_ALTA]
+        self.menu_alta.configure(values=opciones)
+        canonica = next(
+            (item for item in opciones if item.casefold() == self._categoria_alta.casefold()),
+            None,
+        )
+        if canonica is None or canonica == ETIQUETA_NUEVA_ALTA:
+            self._categoria_alta = ETIQUETA_SIN_CATEGORIA
+            canonica = ETIQUETA_SIN_CATEGORIA
+        else:
+            self._categoria_alta = canonica
+        self.menu_alta.set(canonica)
 
     def _categoria_consulta(self) -> str:
         """Filtro de categoría según la vista. Dentro de una sección manda la sección."""
@@ -886,12 +934,14 @@ class Aplicacion(ctk.CTk):
     def _al_cambiar_vista(self, valor: str) -> None:
         self._seccion = None
         self._vista = "enlaces" if valor == "Todos los enlaces" else "categorias"
+        self._fijar_categoria_alta_por_vista()
         self._aplicar_vista()
         self.refrescar_lista()
 
     def _volver_tarjetas(self) -> None:
         self._seccion = None
         self._vista = "categorias"
+        self._fijar_categoria_alta_por_vista()
         try:
             self.vista_control.set("Categorías")
         except Exception:
@@ -902,6 +952,7 @@ class Aplicacion(ctk.CTk):
     def _entrar_seccion(self, nombre: str) -> None:
         self._vista = "categorias"
         self._seccion = nombre
+        self._fijar_categoria_alta_por_vista()
         try:
             self.vista_control.set("Categorías")
         except Exception:
@@ -1151,6 +1202,8 @@ class Aplicacion(ctk.CTk):
             self.titulo_seccion.configure(text=nuevo)
         if self._filtro_categoria.casefold() == anterior.strip().casefold():
             self._filtro_categoria = nuevo
+        if self._categoria_alta.casefold() == anterior.strip().casefold():
+            self._categoria_alta = nuevo
         return None
 
     def _pedir_nombre(self, titulo: str, inicial: str, aplicar) -> None:
@@ -1339,6 +1392,8 @@ class Aplicacion(ctk.CTk):
         self.aviso.configure(text="")
         if self._filtro_categoria.casefold() == nombre.strip().casefold():
             self._filtro_categoria = "todas"
+        if self._categoria_alta.casefold() == nombre.strip().casefold():
+            self._categoria_alta = ETIQUETA_SIN_CATEGORIA
         if self._seccion is not None and self._seccion.casefold() == nombre.strip().casefold():
             self._volver_tarjetas()
             return
@@ -1953,6 +2008,7 @@ class Aplicacion(ctk.CTk):
         self._filas = {}
         for hijo in self.lista.winfo_children():
             hijo.destroy()
+        self._rehacer_menu_alta()
         if self._mostrando_tarjetas():
             self._pintar_tarjetas()
             self._pintar_resumen()

@@ -6,6 +6,8 @@ consola de la persistencia y del verificador.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -169,19 +171,112 @@ def probar_persistencia(informe: _Comprobaciones) -> None:
             "una lista antigua se copia a .bak y el archivo queda vacío",
         )
 
+
+def probar_ruta(informe: _Comprobaciones) -> None:
+    with tempfile.TemporaryDirectory() as carpeta:
+        base = Path(carpeta)
+        aviso = io.StringIO()
+        with contextlib.redirect_stderr(aviso):
+            elegida = datos.ruta_datos(base)
         informe.comprobar(
-            datos.ruta_datos(base) == base / "enlaces.json"
-            and not (base / ".sonda_escritura").exists(),
-            "si la carpeta es escribible, el JSON queda junto al script",
+            elegida == base / "data" / "enlaces.json"
+            and (base / "data").is_dir()
+            and not (base / "data" / ".sonda_escritura").exists()
+            and not elegida.exists()
+            and aviso.getvalue() == "",
+            "si la carpeta es escribible, el JSON queda en data/ y no se crea el archivo",
+        )
+
+        texto = '{"version": 1}\n'
+        antiguo = base / "enlaces.json"
+        antiguo.write_text(texto, encoding="utf-8")
+        aviso = io.StringIO()
+        with contextlib.redirect_stderr(aviso):
+            otra = datos.ruta_datos(base)
+        informe.comprobar(
+            otra == elegida
+            and antiguo.read_text(encoding="utf-8") == texto
+            and "ignora" in aviso.getvalue().casefold()
+            and str(antiguo) in aviso.getvalue()
+            and not elegida.exists(),
+            "un enlaces.json en la raíz se ignora y no se migra ni se borra",
         )
 
         marcador = base / "no_es_directorio.txt"
         marcador.write_text("x", encoding="utf-8")
         config = base / "config-prueba"
-        elegida = datos.ruta_datos(marcador, carpeta_config=config)
+        aviso = io.StringIO()
+        with contextlib.redirect_stderr(aviso):
+            fallback = datos.ruta_datos(marcador, carpeta_config=config)
         informe.comprobar(
-            elegida == config / "enlaces.json" and config.is_dir(),
+            fallback == config / "enlaces.json" and config.is_dir() and aviso.getvalue() == "",
             "si la ruta no es escribible, se usa la carpeta de configuración",
+        )
+
+
+def probar_alta(informe: _Comprobaciones) -> None:
+    coleccion = datos.coleccion_vacia()
+    datos.crear_categoria(coleccion, "Lectura")
+    existentes = [datos.enlace_nuevo("https://example.com/ya")]
+    nuevos, repetidos, invalidos = datos.nuevos_enlaces(
+        [
+            "https://example.com/ya",
+            "example.com/uno",
+            "https://EXAMPLE.com/uno/",
+            "no es url",
+        ],
+        existentes,
+        coleccion,
+        "lectura",
+    )
+    informe.comprobar(
+        len(nuevos) == 1
+        and nuevos[0]["url"] == "https://example.com/uno"
+        and nuevos[0]["categoria"] == "Lectura"
+        and repetidos == 2
+        and invalidos == 1
+        and [item["nombre"] for item in coleccion["categorias"]] == ["Lectura"]
+        and coleccion["enlaces"] == [],
+        "añadir usa la categoría elegida y descarta duplicados e inválidos",
+    )
+    sin_categoria, repetidos_sin, invalidos_sin = datos.nuevos_enlaces(
+        ["https://example.com/libre"],
+        [],
+        coleccion,
+        "Sin categoría",
+    )
+    vacio, _, _ = datos.nuevos_enlaces(
+        ["https://example.com/vacio"],
+        [],
+        coleccion,
+        "   ",
+    )
+    informe.comprobar(
+        len(sin_categoria) == 1
+        and sin_categoria[0]["categoria"] == ""
+        and repetidos_sin == 0
+        and invalidos_sin == 0
+        and len(vacio) == 1
+        and vacio[0]["categoria"] == "",
+        "Sin categoría se guarda como cadena vacía",
+    )
+
+    with tempfile.TemporaryDirectory() as carpeta:
+        base = Path(carpeta)
+        aviso = io.StringIO()
+        with contextlib.redirect_stderr(aviso):
+            ruta = datos.ruta_datos(base)
+        coleccion["enlaces"].append(nuevos[0])
+        datos.guardar_enlaces(coleccion, ruta)
+        leido = datos.cargar_enlaces(ruta)
+        guardado = leido["enlaces"][0]
+        informe.comprobar(
+            ruta == base / "data" / "enlaces.json"
+            and aviso.getvalue() == ""
+            and guardado["url"] == "https://example.com/uno"
+            and guardado["categoria"] == "Lectura"
+            and leido["categorias"][0]["nombre"] == "Lectura",
+            "un enlace nuevo se guarda en data/ con la categoría elegida",
         )
 
 
@@ -191,13 +286,30 @@ def probar_categorias(informe: _Comprobaciones) -> None:
     datos.crear_categoria(coleccion, "Lectura")
     fecha = coleccion["categorias"][0]["fecha_creacion"]
     rechazados: list[str] = []
-    for nombre in ("", "   ", "peliculas", "Sin categoría", "Todas", "Nueva categoría"):
+    for nombre in (
+        "",
+        "   ",
+        "peliculas",
+        "Sin categoría",
+        "Todas",
+        "Nueva categoría",
+        "Nueva categoría...",
+    ):
         try:
             datos.crear_categoria(coleccion, nombre)
         except datos.ErrorCategoria:
             rechazados.append(nombre)
     informe.comprobar(
-        rechazados == ["", "   ", "peliculas", "Sin categoría", "Todas", "Nueva categoría"]
+        rechazados
+        == [
+            "",
+            "   ",
+            "peliculas",
+            "Sin categoría",
+            "Todas",
+            "Nueva categoría",
+            "Nueva categoría...",
+        ]
         and len(coleccion["categorias"]) == 2,
         "un nombre vacío, repetido o reservado no crea categoría",
     )
@@ -489,8 +601,12 @@ def main() -> int:
     informe = _Comprobaciones()
     print("Persistencia")
     probar_persistencia(informe)
+    print("Ruta")
+    probar_ruta(informe)
     print("Categorías")
     probar_categorias(informe)
+    print("Alta")
+    probar_alta(informe)
     print("CSV")
     probar_csv(informe)
     print("Normalización")

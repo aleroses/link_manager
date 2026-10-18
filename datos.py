@@ -1,8 +1,8 @@
 """Persistencia de categorías y enlaces en un archivo JSON.
 
-El archivo vive junto a este módulo cuando la carpeta se puede escribir.
-Si el script está en una ruta de solo lectura, se usa la carpeta de
-configuración del usuario. El documento es un objeto con version 2,
+El archivo vive en data/ junto a este módulo cuando esa carpeta se puede
+escribir. Si el script está en una ruta de solo lectura, se usa la carpeta
+de configuración del usuario. El documento es un objeto con version 2,
 categorias y enlaces.
 """
 
@@ -16,11 +16,15 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import verificador
+
 NOMBRE_ARCHIVO = "enlaces.json"
+NOMBRE_CARPETA = "data"
 VERSION_DATOS = 2
 _SONDA = ".sonda_escritura"
 # Etiquetas de la ventana. No pueden usarse como nombre de categoría.
-NOMBRES_RESERVADOS = {"sin categoría", "todas", "nueva categoría"}
+NOMBRES_RESERVADOS = {"sin categoría", "todas", "nueva categoría", "nueva categoría..."}
+ETIQUETA_SIN_CATEGORIA = "Sin categoría"
 
 
 def directorio_escribible(ruta: Path) -> bool:
@@ -59,23 +63,41 @@ def directorio_configuracion() -> Path:
     return Path.home() / ".config" / "gestor-de-enlaces"
 
 
+def _avisar_json_antiguo(base: Path) -> None:
+    """Avisa si queda un enlaces.json en la raíz. No lo copia ni lo borra."""
+    if not base.is_dir():
+        return
+    antiguo = base / NOMBRE_ARCHIVO
+    if not antiguo.is_file():
+        return
+    print(f"Se ignora {antiguo}. No se migra ni se borra.", file=sys.stderr)
+
+
 def ruta_datos(
     base: Path | None = None,
     carpeta_config: Path | None = None,
 ) -> Path:
-    """Devuelve la ruta de enlaces.json sin crearlo.
+    """Devuelve la ruta de data/enlaces.json sin crear el archivo.
 
-    base permite probar con una carpeta temporal. carpeta_config solo
-    se usa cuando base no es escribible, para no tocar la configuración
-    real durante las pruebas.
+    Crea la carpeta data/ si no existe y se puede. base permite probar
+    con una carpeta temporal. carpeta_config solo se usa cuando data/
+    no es escribible, para no tocar la configuración real durante las
+    pruebas. Un enlaces.json en la raíz de base se ignora.
     """
     if base is None:
         base = Path(__file__).resolve().parent
-    if directorio_escribible(base):
-        return base / NOMBRE_ARCHIVO
+    carpeta = base / NOMBRE_CARPETA
+    try:
+        carpeta.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        carpeta = None
+    if carpeta is not None and directorio_escribible(carpeta):
+        _avisar_json_antiguo(base)
+        return carpeta / NOMBRE_ARCHIVO
 
     destino = carpeta_config if carpeta_config is not None else directorio_configuracion()
     destino.mkdir(parents=True, exist_ok=True)
+    _avisar_json_antiguo(base)
     return destino / NOMBRE_ARCHIVO
 
 
@@ -239,6 +261,60 @@ def eliminar_categoria(coleccion: dict, nombre: str, borrar_enlaces: bool) -> No
             continue
         if _clave_categoria(str(enlace.get("categoria") or "")) == clave:
             enlace["categoria"] = ""
+
+
+def categoria_de_alta(coleccion: dict, elegida: str) -> str:
+    """Nombre que se guarda al añadir. Sin categoría queda en cadena vacía.
+
+    Si el nombre ya existe, devuelve la grafía guardada. No crea fichas.
+    """
+    texto = elegida.strip()
+    if not texto or texto.casefold() == ETIQUETA_SIN_CATEGORIA.casefold():
+        return ""
+    existente = buscar_categoria(coleccion, texto)
+    if existente is not None:
+        return str(existente.get("nombre") or texto)
+    return texto
+
+
+def nuevos_enlaces(
+    lineas: list[str],
+    existentes: list,
+    coleccion: dict,
+    categoria: str,
+) -> tuple[list[dict], int, int]:
+    """Enlaces nuevos, repetidos e inválidos. No modifica la colección.
+
+    Un duplicado dentro de las propias líneas también cuenta como repetido.
+    Todos los enlaces nuevos quedan en la misma categoría.
+    """
+    categoria_guardada = categoria_de_alta(coleccion, categoria)
+    claves: set[str] = set()
+    for enlace in existentes:
+        if not isinstance(enlace, dict):
+            continue
+        try:
+            claves.add(verificador.clave_url(str(enlace.get("url") or "")))
+        except ValueError:
+            continue
+    nuevos: list[dict] = []
+    repetidos = 0
+    invalidos = 0
+    for linea in lineas:
+        try:
+            url = verificador.normalizar_url(linea)
+            clave = verificador.clave_url(url)
+        except ValueError:
+            invalidos += 1
+            continue
+        if clave in claves:
+            repetidos += 1
+            continue
+        claves.add(clave)
+        enlace = enlace_nuevo(url)
+        enlace["categoria"] = categoria_guardada
+        nuevos.append(enlace)
+    return nuevos, repetidos, invalidos
 
 
 def asegurar_categoria(coleccion: dict, nombre: str) -> str:
