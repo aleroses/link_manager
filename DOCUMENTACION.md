@@ -178,3 +178,38 @@ Ninguno de ejecución distinto del diseño anterior: programar `after()` desde e
 - Filtros, búsqueda, categorías editables, notas, CSV y contadores (fase 6).
 - Pulido y notas de PyInstaller (fase 7).
 - Crear la rama `debian` al validar en Linux.
+
+## 2026-10-17 — Fase 5: Verificación masiva
+
+### Qué se hizo
+
+El botón Verificar todos comprueba la lista con un `ThreadPoolExecutor` de 8 hilos. Mientras corre, la barra superior muestra la barra de progreso, el contador "8 de 25 (32%)" y Cancelar. Al terminar, el aviso dice cuántos se comprobaron. Cancelar no abre más conexiones: lo que ya está en la red termina y se guarda; el resto se omite y conserva su estado.
+
+Añadir un enlace usa el mismo grupo de hilos, así que nunca hay más de 8 comprobaciones a la vez aunque se pulse Verificar todos y se añada otro enlace.
+
+### Decisiones técnicas y por qué
+
+- El hilo de red no llama a `after()` ni toca widgets. En la fase 3 eso fallaba: Tk responde que el hilo principal no está en su bucle y el estado se quedaba en pendiente. El trabajador deja el resultado en una cola. Un `after()` del hilo principal, cada 100 ms, escribe el estado, guarda el JSON y pinta la fila y la barra.
+- El contador y la barra cuentan comprobaciones que salieron a la red, no los enlaces omitidos por Cancelar. Por eso, al cancelar, el texto puede quedarse en "8 de 25 (32%)" y el aviso repite esa cifra. El porcentaje es entero (`hechos * 100 // total`) para no mostrar 100% antes del último.
+- Cada envío lleva un token. Si el enlace se borró, o si llegó un resultado más viejo que el último envío, no se escribe. Borrar el de arriba no cambia el de abajo.
+- La fila se actualiza en su sitio (punto, título y estado). Redibujar toda la lista en cada resultado haría saltar el scroll y cortaría el segundo del icono de copiar.
+- Cancelar usa un `Event` distinto en cada pulsación. No se reutiliza uno ya activado: si no, un lote nuevo podría heredar la cancelación del anterior.
+- Al cerrar la ventana se cancela lo pendiente y `shutdown(wait=False, cancel_futures=True)` no espera. Los hilos del grupo no son demonios (así es `ThreadPoolExecutor` en la biblioteca estándar, también en Python 3.10). Una comprobación ya empezada puede retener el proceso hasta su límite de 8 segundos. La ventana sí se cierra al momento.
+- La barra permanece unos 700 ms en el valor final para que se pueda leer, y después se oculta. Verificar todos vuelve a poder pulsarse entonces. Mientras tanto el botón se atenúa: sigue a la vista, pero no acepta otra tanda.
+- Al cerrar la ventana se cancelan los `after()` propios. Si no, Tk intenta pintar una ventana que ya no existe.
+
+### Archivos creados o modificados
+
+- `interfaz.py`
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+Ninguno de ejecución. El reparto se comprobó con un verificador falso: 25 enlaces, nunca más de 8 hilos dentro de la función, el contador en "8 de 25 (32%)", Cancelar dejando sin empezar los que aún estaban en la cola, y el estado sin cambiar hasta que el `after()` del hilo principal recogía la cola.
+
+### Pendientes
+
+- Filtros, búsqueda, categorías editables, notas, CSV y contadores (fase 6).
+- Pulido y notas de PyInstaller (fase 7).
+- Crear la rama `debian` al validar en Linux.

@@ -66,6 +66,8 @@ Se abre la ventana "Gestor de Enlaces". Pega una dirección en el campo y pulsa 
 
 En cada fila hay tres botones de icono: Abrir (también vale el doble clic sobre el texto), Copiar URL y Eliminar. Abrir lanza el navegador predeterminado y marca el enlace como visitado. Copiar cambia el icono a una marca de verificación durante un segundo. Eliminar pide confirmación. Si pegas el mismo enlace con otra forma (`example.com` y `https://example.com/`), la aplicación avisa y no lo añade otra vez.
 
+El botón Verificar todos comprueba la lista. Aparecen una barra, el texto "8 de 25 (32%)" y el botón Cancelar. Como máximo hay 8 comprobaciones a la vez, y se puede seguir usando la ventana. Cancelar no corta lo que ya salió a la red: eso termina y se anota. El resto no se inicia.
+
 Sin activar el entorno:
 
 - Windows: `.\venv\Scripts\python.exe main.py`
@@ -124,8 +126,10 @@ Hasta esta fase:
 - Copiar la URL al portapapeles. El icono del botón pasa a una marca de verificación durante un segundo.
 - Eliminar un enlace, con confirmación.
 - Avisar si el enlace ya está en la lista, aunque cambie el esquema, las mayúsculas, la barra final o el fragmento `#...`.
+- Verificar todos los enlaces, con un máximo de 8 comprobaciones a la vez.
+- Barra de progreso, contador "8 de 25 (32%)" y botón Cancelar. Los resultados solo se pintan en el hilo principal.
 
-Todavía no se pueden editar notas ni categoría. Tampoco hay buscador, filtros ni barra de progreso.
+Todavía no se pueden editar notas ni categoría. Tampoco hay buscador, filtros ni exportación.
 
 ## Ramas
 
@@ -152,5 +156,7 @@ git checkout windows
 **La ventana dice que faltan iconos.** Tiene que existir cada `nombre-40.png` dentro de `assets/icons/`. No borres esa carpeta.
 
 **Las pruebas de "Red" salen FALLO y el resto OK.** Esas tres necesitan internet y que `example.com` responda. Revisa la conexión y vuelve a lanzar `python main.py --probar`. Un dominio `.invalid` debe quedar como `caído`; si una red corporativa responde por él, esa prueba concreta puede fallar.
+
+**Verificar todos tarda o parece parado.** Cada enlace espera como máximo 8 segundos, y solo 8 van a la vez. Con 25 enlaces lentos puede acercarse al medio minuto. Cancelar deja terminar los que ya empezaron (nunca más de 8) y no inicia los demás.
 
 **Aparece un archivo `.bak`.** El JSON no se pudo leer. La copia conserva el contenido anterior. El archivo de trabajo se reescribe como lista vacía para que el programa pueda seguir. No borres el `.bak` hasta recuperar lo que te interese.

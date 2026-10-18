@@ -1,9 +1,9 @@
 """Ventana del Gestor de Enlaces.
 
 Tema oscuro, campo para añadir una URL y lista con el estado de cada
-enlace. La comprobación de red ocurre en un hilo. Ese hilo no toca
-widgets: deja el resultado en una cola y el hilo principal lo aplica
-con after().
+enlace. La comprobación de red ocurre en un grupo de hasta 8 hilos.
+Esos hilos no tocan widgets: dejan el resultado en una cola y el hilo
+principal lo aplica con after().
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import queue
 import threading
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,6 +20,12 @@ from PIL import Image
 
 import datos
 import verificador
+
+# Tope de comprobaciones simultáneas. Más hilos no aceleran la red y
+# sí pueden disparar bloqueos en los sitios.
+HILOS_VERIFICACION = 8
+# La barra se queda un momento en el valor final para que se pueda leer.
+PAUSA_CIERRE_PROGRESO_MS = 700
 
 CARPETA_ICONOS = Path(__file__).resolve().parent / "assets" / "icons"
 
@@ -61,6 +68,17 @@ COLORES_ESTADO = {
 }
 
 
+def texto_progreso(hechos: int, total: int) -> str:
+    """Contador de la barra: '8 de 25 (32%)'.
+
+    El porcentaje usa división entera para no mostrar 100% antes de
+    terminar la última comprobación.
+    """
+    if total <= 0:
+        return "0 de 0 (0%)"
+    return f"{hechos} de {total} ({hechos * 100 // total}%)"
+
+
 def cargar_iconos(carpeta: Path | None = None) -> dict[str, ctk.CTkImage]:
     """Carga el PNG de 40 px y lo muestra a 20 px para pantallas HiDPI.
 
@@ -95,7 +113,27 @@ class Aplicacion(ctk.CTk):
         # resultado aqui; el hilo principal lo aplica con after().
         # La cola guarda el diccionario, no su posición: si se borra
         # otro enlace, el resultado no se escribe en el de al lado.
-        self._resultados: queue.Queue[tuple[dict, str, int | None, str, str]] = queue.Queue()
+        self._resultados: queue.Queue[tuple] = queue.Queue()
+        self._ejecutor = ThreadPoolExecutor(
+            max_workers=HILOS_VERIFICACION,
+            thread_name_prefix="verificar",
+        )
+        self._cerrando = False
+        self._lote = 0
+        self._token = 0
+        # El token evita que un resultado viejo pise uno más reciente
+        # del mismo enlace (por ejemplo, añadir y justo después
+        # verificar todos).
+        self._token_por_enlace: dict[int, int] = {}
+        self._cancelar_lote: threading.Event | None = None
+        self._verificacion_masiva = False
+        self._total_lote = 0
+        self._hechos_lote = 0
+        self._pendientes_lote = 0
+        self._fallo_al_guardar = False
+        self._filas: dict[int, dict] = {}
+        self._after_resultados: str | None = None
+        self._after_ocultar: str | None = None
         self.fuente_titulo = ctk.CTkFont(size=15, weight="bold")
         self.fuente_url = ctk.CTkFont(size=13)
         self.fuente_detalle = ctk.CTkFont(size=12)
@@ -108,6 +146,7 @@ class Aplicacion(ctk.CTk):
         self.geometry("1000x680")
         self.minsize(800, 520)
         self.configure(fg_color=COLORES["fondo"])
+        self.protocol("WM_DELETE_WINDOW", self._al_cerrar)
 
     def _construir(self) -> None:
         barra = ctk.CTkFrame(self, fg_color=COLORES["barra"], corner_radius=0)
@@ -147,6 +186,56 @@ class Aplicacion(ctk.CTk):
         )
         self.boton_anadir.pack(side="left")
 
+        self.fila_verificar = ctk.CTkFrame(barra, fg_color="transparent")
+        self.fila_verificar.pack(fill="x", padx=20, pady=(0, 4))
+        self.fila_verificar.grid_columnconfigure(1, weight=1)
+
+        self.boton_verificar = ctk.CTkButton(
+            self.fila_verificar,
+            text="Verificar todos",
+            image=self.iconos["verificar"],
+            compound="left",
+            width=190,
+            height=36,
+            corner_radius=10,
+            fg_color=COLORES["acento"],
+            hover_color=COLORES["acento_hover"],
+            text_color=COLORES["texto_boton"],
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self.verificar_todos,
+        )
+        self.boton_verificar.grid(row=0, column=0, sticky="w")
+
+        self.barra_progreso = ctk.CTkProgressBar(
+            self.fila_verificar,
+            height=10,
+            corner_radius=5,
+            fg_color=COLORES["fondo"],
+            progress_color=COLORES["acento"],
+            border_width=0,
+        )
+        self.barra_progreso.set(0)
+        self.texto_progreso = ctk.CTkLabel(
+            self.fila_verificar,
+            text=texto_progreso(0, 0),
+            width=148,
+            anchor="e",
+            text_color=COLORES["texto"],
+            font=self.fuente_detalle,
+        )
+        self.boton_cancelar = ctk.CTkButton(
+            self.fila_verificar,
+            text="Cancelar",
+            width=110,
+            height=36,
+            corner_radius=10,
+            fg_color=COLORES["fondo"],
+            hover_color=COLORES["borde"],
+            text_color=COLORES["texto"],
+            font=ctk.CTkFont(size=13),
+            command=self.cancelar_verificacion,
+        )
+
         self.aviso = ctk.CTkLabel(
             barra,
             text="",
@@ -167,7 +256,7 @@ class Aplicacion(ctk.CTk):
         )
         self.lista.pack(fill="both", expand=True, padx=16, pady=(8, 16))
         self.entrada.focus_set()
-        self.after(100, self._recoger_resultados)
+        self._after_resultados = self.after(100, self._recoger_resultados)
 
     def anadir(self) -> None:
         """Normaliza la URL, rechaza duplicados y verifica en segundo plano."""
@@ -193,12 +282,7 @@ class Aplicacion(ctk.CTk):
 
         self.entrada.delete(0, "end")
         self.refrescar_lista()
-        hilo = threading.Thread(
-            target=self._verificar_en_segundo_plano,
-            args=(enlace, url),
-            daemon=True,
-        )
-        hilo.start()
+        self._enviar_verificacion(enlace, url, lote=None, cancelar=None)
 
     def _es_duplicado(self, url: str) -> bool:
         clave = verificador.clave_url(url)
@@ -210,13 +294,52 @@ class Aplicacion(ctk.CTk):
                 continue
         return False
 
-    def _verificar_en_segundo_plano(self, enlace: dict, url: str) -> None:
-        estado, codigo, titulo = verificador.verificar_url(url)
-        momento = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        self._resultados.put((enlace, estado, codigo, titulo, momento))
+    def _enviar_verificacion(
+        self,
+        enlace: dict,
+        url: str,
+        lote: int | None,
+        cancelar: threading.Event | None,
+    ) -> None:
+        """Encola la comprobación. Como máximo hay 8 hilos de red."""
+        self._token += 1
+        token = self._token
+        self._token_por_enlace[id(enlace)] = token
+        self._ejecutor.submit(
+            self._verificar_en_segundo_plano,
+            enlace,
+            url,
+            lote,
+            token,
+            cancelar,
+        )
+
+    def _verificar_en_segundo_plano(
+        self,
+        enlace: dict,
+        url: str,
+        lote: int | None,
+        token: int,
+        cancelar: threading.Event | None,
+    ) -> None:
+        """Corre fuera del hilo principal. No llama a after() ni a widgets."""
+        try:
+            if cancelar is not None and cancelar.is_set():
+                self._resultados.put(("omitido", lote))
+                return
+            estado, codigo, titulo = verificador.verificar_url(url)
+            momento = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            self._resultados.put(
+                ("resultado", enlace, estado, codigo, titulo, momento, lote, token)
+            )
+        except Exception:
+            momento = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            self._resultados.put(("resultado", enlace, "caído", None, "", momento, lote, token))
 
     def _recoger_resultados(self) -> None:
-        """Aplica lo que el hilo de red ya termino. Corre en el hilo principal."""
+        """Aplica lo que los hilos de red ya terminaron. Corre en el hilo principal."""
+        if self._cerrando:
+            return
         try:
             if not self.winfo_exists():
                 return
@@ -224,22 +347,163 @@ class Aplicacion(ctk.CTk):
             return
         try:
             while True:
-                enlace, estado, codigo, titulo, momento = self._resultados.get_nowait()
-                self._aplicar_verificacion(enlace, estado, codigo, titulo, momento)
+                self._consumir_resultado(self._resultados.get_nowait())
         except queue.Empty:
             pass
-        self.after(100, self._recoger_resultados)
+        if self._cerrando:
+            return
+        self._after_resultados = self.after(100, self._recoger_resultados)
+
+    def _consumir_resultado(self, item: tuple) -> None:
+        tipo = item[0]
+        if tipo == "omitido":
+            _, lote = item
+            self._cerrar_trabajo(lote, contado=False)
+            return
+        _, enlace, estado, codigo, titulo, momento, lote, token = item
+        self._escribir_resultado(enlace, estado, codigo, titulo, momento, token)
+        self._cerrar_trabajo(lote, contado=True)
+
+    def verificar_todos(self) -> None:
+        """Comprueba la lista actual. Lo que se añada después va aparte."""
+        if self._verificacion_masiva or self._cerrando:
+            return
+        seleccion = [enlace for enlace in self.enlaces if isinstance(enlace, dict)]
+        if not seleccion:
+            self.aviso.configure(text="Todavía no hay enlaces para verificar.")
+            return
+
+        self._lote += 1
+        lote = self._lote
+        cancelar = threading.Event()
+        self._cancelar_lote = cancelar
+        self._verificacion_masiva = True
+        self._fallo_al_guardar = False
+        self._hechos_lote = 0
+        self._total_lote = len(seleccion)
+        self._pendientes_lote = len(seleccion)
+        self._mostrar_progreso()
+        self.aviso.configure(text="")
+        enviados = 0
+        try:
+            for enlace in seleccion:
+                self._enviar_verificacion(
+                    enlace,
+                    str(enlace.get("url") or ""),
+                    lote,
+                    cancelar,
+                )
+                enviados += 1
+        except RuntimeError:
+            self._total_lote = enviados
+            self._pendientes_lote = enviados
+            if enviados == 0:
+                self._finalizar_lote()
+
+    def cancelar_verificacion(self) -> None:
+        """No inicia más comprobaciones. Las que ya salieron a la red terminan."""
+        if not self._verificacion_masiva or self._cancelar_lote is None:
+            return
+        if self._cancelar_lote.is_set():
+            return
+        self._cancelar_lote.set()
+        self.boton_cancelar.configure(state="disabled")
+        self.aviso.configure(text="Cancelando la verificación.")
+
+    def _mostrar_progreso(self) -> None:
+        self.barra_progreso.set(0)
+        self.texto_progreso.configure(text=texto_progreso(0, self._total_lote))
+        self.boton_cancelar.configure(state="normal")
+        self.boton_verificar.configure(state="disabled", fg_color=COLORES["borde"])
+        self.barra_progreso.grid(row=0, column=1, sticky="ew", padx=(14, 12))
+        self.texto_progreso.grid(row=0, column=2, padx=(0, 12))
+        self.boton_cancelar.grid(row=0, column=3)
+
+    def _ocultar_progreso(self) -> None:
+        self.barra_progreso.grid_remove()
+        self.texto_progreso.grid_remove()
+        self.boton_cancelar.grid_remove()
+        self.boton_verificar.configure(state="normal", fg_color=COLORES["acento"])
+
+    def _pintar_progreso(self) -> None:
+        total = self._total_lote
+        hechos = self._hechos_lote
+        self.texto_progreso.configure(text=texto_progreso(hechos, total))
+        self.barra_progreso.set(0 if total <= 0 else hechos / total)
+
+    def _cerrar_trabajo(self, lote: int | None, contado: bool) -> None:
+        if lote is None or not self._verificacion_masiva or lote != self._lote:
+            return
+        self._pendientes_lote -= 1
+        if contado:
+            self._hechos_lote += 1
+        self._pintar_progreso()
+        if self._pendientes_lote <= 0:
+            self._finalizar_lote()
+
+    def _finalizar_lote(self) -> None:
+        hechos = self._hechos_lote
+        total = self._total_lote
+        cancelado = self._cancelar_lote is not None and self._cancelar_lote.is_set()
+        fallo = self._fallo_al_guardar
+        lote = self._lote
+        self._verificacion_masiva = False
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        self.boton_cancelar.configure(state="disabled")
+        if fallo:
+            self.aviso.configure(text="No se pudo guardar el resultado de la verificación.")
+        elif cancelado:
+            self.aviso.configure(
+                text=f"Verificación cancelada. {hechos} de {total} comprobados."
+            )
+        else:
+            self.aviso.configure(text=f"Verificación terminada. {hechos} de {total}.")
+        self._after_ocultar = self.after(
+            PAUSA_CIERRE_PROGRESO_MS,
+            lambda lote=lote: self._ocultar_progreso_lote(lote),
+        )
+
+    def _ocultar_progreso_lote(self, lote: int) -> None:
+        """Quita la barra solo si ese lote sigue siendo el último y ya terminó."""
+        if self._cerrando or lote != self._lote or self._verificacion_masiva:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        self._ocultar_progreso()
+
+    def _al_cerrar(self) -> None:
+        """Cierra la ventana sin esperar a la red. Lo ya encolado no arranca."""
+        self._cerrando = True
+        if self._cancelar_lote is not None:
+            self._cancelar_lote.set()
+        for identificador in (self._after_resultados, self._after_ocultar):
+            if identificador is None:
+                continue
+            try:
+                self.after_cancel(identificador)
+            except Exception:
+                pass
+        self._ejecutor.shutdown(wait=False, cancel_futures=True)
+        self.destroy()
 
     def _sigue_en_lista(self, enlace: dict) -> bool:
         return any(item is enlace for item in self.enlaces)
 
-    def _aplicar_verificacion(
+    def _escribir_resultado(
         self,
         enlace: dict,
         estado: str,
         codigo: int | None,
         titulo: str,
         momento: str,
+        token: int,
     ) -> None:
         """Escribe el resultado en la lista. Solo se llama desde el hilo principal."""
         try:
@@ -249,6 +513,8 @@ class Aplicacion(ctk.CTk):
             return
         if not self._sigue_en_lista(enlace):
             return
+        if self._token_por_enlace.get(id(enlace)) != token:
+            return
 
         enlace["estado"] = estado
         enlace["codigo_http"] = codigo
@@ -257,10 +523,41 @@ class Aplicacion(ctk.CTk):
         try:
             datos.guardar_enlaces(self.enlaces, self.ruta)
         except OSError:
-            self.aviso.configure(text="No se pudo guardar el resultado de la verificación.")
-        self.refrescar_lista()
+            self._fallo_al_guardar = True
+            if not self._verificacion_masiva:
+                self.aviso.configure(text="No se pudo guardar el resultado de la verificación.")
+        self._pintar_fila(enlace)
+
+    def _presentacion(self, enlace: dict) -> tuple[str, str, str]:
+        estado = str(enlace.get("estado") or "pendiente")
+        color = COLORES_ESTADO.get(estado, COLORES_ESTADO["pendiente"])
+        titulo = str(enlace.get("titulo") or "").strip() or "Sin título"
+        detalle = estado
+        categoria = str(enlace.get("categoria") or "").strip()
+        if categoria:
+            detalle = f"{estado}  ·  {categoria}"
+        return titulo, detalle, color
+
+    def _pintar_fila(self, enlace: dict) -> None:
+        """Actualiza color y textos de una fila sin redibujar la lista."""
+        info = self._filas.get(id(enlace))
+        if not info:
+            self.refrescar_lista()
+            return
+        try:
+            viva = bool(info["punto"].winfo_exists())
+        except Exception:
+            viva = False
+        if not viva:
+            self.refrescar_lista()
+            return
+        titulo, detalle, color = self._presentacion(enlace)
+        info["punto"].configure(fg_color=color)
+        info["titulo"].configure(text=titulo)
+        info["detalle"].configure(text=detalle, text_color=color)
 
     def refrescar_lista(self) -> None:
+        self._filas = {}
         for hijo in self.lista.winfo_children():
             hijo.destroy()
         if not self.enlaces:
@@ -423,9 +720,7 @@ class Aplicacion(ctk.CTk):
             self._ligar_doble_clic(hijo, enlace)
 
     def _crear_fila(self, enlace: dict) -> None:
-        estado = str(enlace.get("estado") or "pendiente")
-        color = COLORES_ESTADO.get(estado, COLORES_ESTADO["pendiente"])
-        titulo = str(enlace.get("titulo") or "").strip() or "Sin título"
+        titulo, detalle, color = self._presentacion(enlace)
 
         fila = ctk.CTkFrame(self.lista, fg_color=COLORES["fila"], corner_radius=12)
         fila.pack(fill="x", pady=6, padx=4)
@@ -438,7 +733,7 @@ class Aplicacion(ctk.CTk):
         textos = ctk.CTkFrame(fila, fg_color="transparent")
         textos.grid(row=0, column=1, sticky="ew", pady=14, padx=(0, 8))
 
-        ctk.CTkLabel(
+        etiqueta_titulo = ctk.CTkLabel(
             textos,
             text=titulo,
             anchor="w",
@@ -446,7 +741,8 @@ class Aplicacion(ctk.CTk):
             text_color=COLORES["texto"],
             font=self.fuente_titulo,
             fg_color="transparent",
-        ).pack(fill="x")
+        )
+        etiqueta_titulo.pack(fill="x")
         ctk.CTkLabel(
             textos,
             text=str(enlace.get("url") or ""),
@@ -458,18 +754,20 @@ class Aplicacion(ctk.CTk):
             fg_color="transparent",
         ).pack(fill="x", pady=(2, 0))
 
-        detalle = estado
-        categoria = str(enlace.get("categoria") or "").strip()
-        if categoria:
-            detalle = f"{estado}  ·  {categoria}"
-        ctk.CTkLabel(
+        etiqueta_detalle = ctk.CTkLabel(
             textos,
             text=detalle,
             anchor="w",
             text_color=color,
             font=self.fuente_detalle,
             fg_color="transparent",
-        ).pack(fill="x", pady=(4, 0))
+        )
+        etiqueta_detalle.pack(fill="x", pady=(4, 0))
+        self._filas[id(enlace)] = {
+            "punto": punto,
+            "titulo": etiqueta_titulo,
+            "detalle": etiqueta_detalle,
+        }
 
         if enlace.get("visitado"):
             ctk.CTkLabel(
