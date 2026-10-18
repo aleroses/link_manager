@@ -5,8 +5,10 @@ Estados devueltos:
 - error: el servidor responde con 4xx o 5xx, o la URL no es válida.
 - caído: timeout, DNS, SSL o fallo de conexión.
 
-El título solo se lee cuando hace falta un GET. Un HEAD con éxito
-no trae cuerpo, así que el título queda vacío en ese caso.
+Si HEAD responde y el contenido parece HTML, un GET parcial (como
+máximo 64 KB) lee el título. Si HEAD falla o el servidor lo rechaza,
+el GET también decide el estado. Sin etiqueta title el título queda
+vacío: quien guarda el enlace puede sustituirlo por uno descriptivo.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ from __future__ import annotations
 import html
 import re
 from html.parser import HTMLParser
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 
@@ -105,6 +107,36 @@ def clave_url(url: str) -> str:
     return clave
 
 
+def titulo_descriptivo(url: str) -> str:
+    """Dominio sin www y, si hay, la última parte legible de la ruta.
+
+    Los guiones del último segmento pasan a espacios. Una URL que no
+    se puede normalizar devuelve cadena vacía.
+    """
+    try:
+        destino = normalizar_url(url)
+    except ValueError:
+        return ""
+    partes = urlparse(destino)
+    host = (partes.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    segmento = _ultimo_segmento_legible(partes.path)
+    if not host:
+        return segmento
+    if segmento:
+        return f"{host} / {segmento}"
+    return host
+
+
+def _ultimo_segmento_legible(ruta: str) -> str:
+    segmentos = [unquote(parte) for parte in ruta.split("/") if parte]
+    if not segmentos:
+        return ""
+    texto = segmentos[-1].replace("-", " ")
+    return re.sub(r"\s+", " ", texto).strip()
+
+
 def clasificar_codigo(codigo: int) -> str:
     """Traduce un código HTTP al estado que guarda la aplicación."""
     if 200 <= codigo <= 399:
@@ -157,13 +189,32 @@ def _titulo_de_respuesta(respuesta: requests.Response) -> str:
     return extraer_titulo(cuerpo, respuesta.encoding)
 
 
+def _titulo_por_get(sesion: requests.Session, destino: str) -> str:
+    """Lee el título con un GET parcial. Un fallo deja el título vacío."""
+    try:
+        respuesta = sesion.get(
+            destino,
+            timeout=TIEMPO_LIMITE,
+            allow_redirects=True,
+            stream=True,
+        )
+    except requests.RequestException:
+        return ""
+    try:
+        return _titulo_de_respuesta(respuesta)
+    finally:
+        respuesta.close()
+
+
 def verificar_url(url: str) -> tuple[str, int | None, str]:
     """Devuelve (estado, codigo_http, titulo).
 
     Prueba HEAD y, si el método falla o el servidor lo rechaza, GET.
+    Si HEAD responde y el contenido parece HTML, un segundo GET, de como
+    máximo 64 KB, solo aporta el título: el código sigue siendo el del HEAD.
     Una URL mal formada devuelve estado "error" y código None: no es
     una caída de red. Un 403 se queda en "error"; marcarlo como activo
-    a mano corresponderá a la interfaz.
+    a mano corresponderá a la interfaz. Sin title el título queda vacío.
     """
     try:
         destino = normalizar_url(url)
@@ -191,8 +242,10 @@ def verificar_url(url: str) -> tuple[str, int | None, str]:
 
             if respuesta_head is not None and respuesta_head.status_code not in CODIGOS_SIN_HEAD:
                 codigo = respuesta_head.status_code
+                pedir_titulo = _parece_html(respuesta_head)
                 respuesta_head.close()
-                return (clasificar_codigo(codigo), codigo, "")
+                titulo = _titulo_por_get(sesion, destino) if pedir_titulo else ""
+                return (clasificar_codigo(codigo), codigo, titulo)
             if respuesta_head is not None:
                 respuesta_head.close()
 

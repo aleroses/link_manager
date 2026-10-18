@@ -275,3 +275,37 @@ Ninguno de ejecución. La consola cubre el ida y vuelta con tildes, una fila sin
 
 - Pulido y notas de PyInstaller (fase 7).
 - Crear la rama `debian` al validar en Linux.
+
+## 2026-10-18 — Fase 7A: Títulos descriptivos y editables
+
+### Qué se hizo
+
+Si HEAD responde y el contenido parece HTML, un GET parcial de como máximo 64 KB lee el `<title>` y cierra la conexión. El código HTTP sigue siendo el del HEAD. Si no hay título, el enlace guarda uno formado con el dominio, sin `www`, y la última parte legible de la ruta. El diálogo de edición incluye el título y el botón Obtener título de nuevo. Un título escrito a mano no se pisa en la siguiente verificación. El texto `Sin título`, si quedó guardado, sí se sustituye.
+
+### Decisiones técnicas y por qué
+
+- El GET de título usa `stream=True`, lee como máximo 64 KB y cierra la respuesta. El tiempo límite sigue en 8 segundos por petición. Si ese GET falla, se conserva el estado que ya dio el HEAD.
+- Un `Content-Type` vacío, o que contenga `html` o `xml`, se trata como HTML. Otro tipo, por ejemplo un PDF, no descarga el cuerpo.
+- `verificar_url` sigue devolviendo cadena vacía cuando no hay `<title>`. Así la prueba de un dominio caído no cambia. Quien guarda el enlace, en `_escribir_resultado`, elige el título de la página o `titulo_descriptivo`.
+- `titulo_manual` vive en el JSON. Falso en un enlace nuevo y en los registros viejos que no traen el campo. Verdadero solo cuando el diálogo guarda un texto distinto del que había y distinto del que acaba de traer el botón. Vaciar el campo, o dejar `Sin título`, guarda el descriptivo y deja la marca en falso.
+- Obtener título de nuevo corre en el mismo grupo de 8 hilos. El resultado entra por la cola y el hilo principal lo escribe en el campo. No cambia el estado ni el código hasta Guardar. Cancelar, Escape o cerrar el diálogo descartan ese resultado.
+- El CSV no gana una columna. Al importar, un título no vacío y distinto de `Sin título` entra con `titulo_manual` en verdadero, para que la verificación posterior lo conserve. Vacío o `Sin título` entra automático.
+- La lista sigue mostrando `Sin título` solo como texto de pantalla mientras el campo guardado esté vacío. Ese texto no se escribe en el JSON.
+
+### Archivos creados o modificados
+
+- `verificador.py`
+- `datos.py`
+- `interfaz.py`
+- `main.py`
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+Ninguno de ejecución. `python main.py --probar` terminó con 37 pruebas correctas y 0 fallos: título descriptivo, sustitución de `Sin título`, respeto de un título manual, GET parcial tras un HEAD HTML y un PDF al que no se le pide el cuerpo. El diálogo, abierto aparte, guardó el título traído por el botón como automático, el campo vacío como título descriptivo y un texto nuevo como manual.
+
+### Pendientes
+
+- Resto del pulido y notas de PyInstaller (fase 7).
+- Crear la rama `debian` al validar en Linux.

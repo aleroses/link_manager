@@ -64,11 +64,11 @@ En Debian el comando es el mismo (`python main.py`) después de `source venv/bin
 
 Se abre la ventana "Gestor de Enlaces". Pega una dirección en el campo y pulsa Añadir (o Enter). El enlace aparece al momento como pendiente y, unos segundos después, cambia de color cuando termina la comprobación. La ventana sigue respondiendo mientras tanto.
 
-En cada fila hay cuatro botones de icono: Editar, Abrir (también vale el doble clic sobre el texto), Copiar URL y Eliminar. Editar cambia la categoría y las notas. Abrir lanza el navegador predeterminado y marca el enlace como visitado. Copiar cambia el icono a una marca de verificación durante un segundo. Eliminar pide confirmación. Si pegas el mismo enlace con otra forma (`example.com` y `https://example.com/`), la aplicación avisa y no lo añade otra vez. Si pegas varias líneas, cada línea es un enlace: las vacías se saltan, las que no son http o https se cuentan y las repetidas no se guardan.
+En cada fila hay cuatro botones de icono: Editar, Abrir (también vale el doble clic sobre el texto), Copiar URL y Eliminar. Editar cambia el título, la categoría y las notas. Obtener título de nuevo vuelve a leer el título de la página. Abrir lanza el navegador predeterminado y marca el enlace como visitado. Copiar cambia el icono a una marca de verificación durante un segundo. Eliminar pide confirmación. Si pegas el mismo enlace con otra forma (`example.com` y `https://example.com/`), la aplicación avisa y no lo añade otra vez. Si pegas varias líneas, cada línea es un enlace: las vacías se saltan, las que no son http o https se cuentan y las repetidas no se guardan.
 
 El botón Verificar todos comprueba la lista entera, también los enlaces que el filtro oculta. Aparecen una barra, el texto "8 de 25 (32%)" y el botón Cancelar. Como máximo hay 8 comprobaciones a la vez, y se puede seguir usando la ventana. Cancelar no corta lo que ya salió a la red: eso termina y se anota. El resto no se inicia.
 
-Debajo hay un buscador y dos menús. El buscador mira título, URL, notas y categoría en cada tecla, sin distinguir mayúsculas. El primer menú deja ver todos, un estado (pendiente, activo, error o caído) o si el enlace está visitado. El segundo filtra por categoría: Todas, Sin categoría o una de las que ya hay. Las tres condiciones se aplican a la vez. La barra inferior cuenta toda la colección, por ejemplo "12 activos, 3 caídos, 2 errores, 5 pendientes". Ahí también están Importar, Exportar y Reintentar caídos. Exportar escribe un CSV con todos los enlaces, no solo los que se ven. Importar añade los nuevos y no borra ni pisa los que ya estaban.
+Debajo hay un buscador y dos menús. El buscador mira título, URL, notas y categoría en cada tecla, sin distinguir mayúsculas. El primer menú deja ver todos, un estado (pendiente, activo, error o caído) o si el enlace está visitado. El segundo filtra por categoría: Todas, Sin categoría o una de las que ya hay. Las tres condiciones se aplican a la vez. La barra inferior cuenta toda la colección, por ejemplo "12 activos, 3 caídos, 2 errores, 5 pendientes". Ahí también están Importar, Exportar y Reintentar caídos. Exportar escribe un CSV con todos los enlaces, no solo los que se ven. Importar añade los nuevos y conserva los que ya estaban. El formato del archivo está en la sección "Formato del CSV".
 
 Sin activar el entorno:
 
@@ -108,9 +108,26 @@ link_manager/
 
 Al abrir la ventana, si todavía no existe el archivo, se crea `enlaces.json` vacío. Las pruebas de `python main.py --probar` usan una carpeta temporal y no escriben ese archivo en el proyecto.
 
-Cada enlace tendrá: `url`, `titulo`, `estado`, `codigo_http`, `visitado`, `categoria`, `notas`, `fecha_añadido`, `ultima_verificacion`.
+Cada enlace tendrá: `url`, `titulo`, `titulo_manual`, `estado`, `codigo_http`, `visitado`, `categoria`, `notas`, `fecha_añadido`, `ultima_verificacion`.
+
+`titulo_manual` queda en verdadero cuando el título se escribe en el diálogo. Mientras lo esté, una verificación posterior lo conserva. Si es falso, o si el título guardado es `Sin título`, la siguiente comprobación escribe el de la página. Si la página no lo trae, el título queda formado por el dominio sin `www` y, cuando la ruta tiene partes, la última con los guiones convertidos en espacios: `example.com / articulo sobre python`.
 
 Estados del enlace: `pendiente`, `activo` (HTTP 200-399), `error` (HTTP 4xx/5xx o URL no válida), `caído` (timeout, DNS, SSL o sin conexión). `visitado` es independiente del estado.
+
+## Formato del CSV
+
+Importar y exportar usan las mismas columnas, en UTF-8 con BOM. La única obligatoria es `url`. Si esa columna no está, el archivo se rechaza y la lista sigue igual. Las demás pueden omitirse:
+
+- `titulo`
+- `estado`
+- `codigo_http`
+- `visitado`
+- `categoria`
+- `notas`
+- `fecha_añadido`
+- `ultima_verificacion`
+
+Una fila vacía, o con la `url` vacía, se omite. Un `estado` distinto de `pendiente`, `activo`, `error` o `caído` queda en `pendiente` y el enlace se verifica. Un estado conocido se conserva. `visitado` se escribe `si` o `no`; al leer también valen `true`, `false`, `1` y `0`. Un título no vacío, distinto de `Sin título`, se conserva en las verificaciones siguientes. La celda vacía o el texto `Sin título` se sustituye la próxima vez que se comprueba el enlace.
 
 ## Funcionalidades disponibles
 
@@ -120,11 +137,11 @@ Hasta esta fase:
 - Cargar y guardar la lista en JSON. Si el archivo no existe, se crea vacío. Si está corrupto, se copia a un `.bak` y el archivo de trabajo queda en `[]`.
 - Escritura atómica: se escribe un temporal y después se renombra.
 - Normalizar una URL (se antepone `https://` si falta el esquema).
-- Verificar una URL con tiempo límite de 8 segundos: primero HEAD y, si falla, GET. El título se lee del HTML cuando la petición es GET.
+- Verificar una URL con tiempo límite de 8 segundos: primero HEAD y, si falla o el servidor responde 405 o 501, GET. Si HEAD responde y el contenido es HTML, un GET parcial de como máximo 64 KB lee el título y se cierra la conexión. El código HTTP sigue siendo el del HEAD. Si no hay título, se guarda uno descriptivo a partir de la URL.
 - Ventana oscura y redimensionable, con iconos Lucide.
 - Campo de URL y botón Añadir. El enlace se guarda al momento y se verifica en segundo plano, sin congelar la ventana.
 - Lista con un punto de color: verde activo, rojo caído, naranja error, gris pendiente. Si hay notas, se ve la primera línea.
-- Editar la categoría y las notas de un enlace.
+- Editar el título, la categoría y las notas de un enlace. Obtener título de nuevo rellena el título desde la página. Un título escrito a mano se conserva al verificar. `Sin título`, si quedó guardado de antes, se sustituye en la siguiente comprobación.
 - Abrir el enlace en el navegador predeterminado, con el botón o con doble clic. Al abrirlo queda marcado como visitado.
 - Copiar la URL al portapapeles. El icono del botón pasa a una marca de verificación durante un segundo.
 - Eliminar un enlace, con confirmación.

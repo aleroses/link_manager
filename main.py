@@ -45,21 +45,50 @@ class _Comprobaciones:
 
 
 class _ServidorLocal(BaseHTTPRequestHandler):
-    """HEAD responde 405 y GET devuelve un HTML con title, en localhost."""
+    """Rutas de prueba en localhost.
+
+    /pagina rechaza HEAD con 405. /html acepta HEAD como HTML y el GET
+    trae el title. /binario responde un PDF y no debería recibir GET.
+    """
+
+    gets_binario = 0
 
     def do_HEAD(self) -> None:
+        if self.path.startswith("/html"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if self.path.startswith("/binario"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         self.send_response(405)
         self.send_header("Content-Length", "0")
         self.send_header("Allow", "GET")
         self.end_headers()
 
     def do_GET(self) -> None:
-        cuerpo = (
-            "<html><head><title>  Título   local  </title></head>"
-            "<body>ok</body></html>"
-        ).encode("utf-8")
+        if self.path.startswith("/binario"):
+            _ServidorLocal.gets_binario += 1
+            cuerpo = b"%PDF"
+            tipo = "application/pdf"
+        elif self.path.startswith("/html"):
+            cuerpo = (
+                "<html><head><title>Desde HEAD</title></head><body>ok</body></html>"
+            ).encode("utf-8")
+            tipo = "text/html; charset=utf-8"
+        else:
+            cuerpo = (
+                "<html><head><title>  Título   local  </title></head>"
+                "<body>ok</body></html>"
+            ).encode("utf-8")
+            tipo = "text/html; charset=utf-8"
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", tipo)
         self.send_header("Content-Length", str(len(cuerpo)))
         self.end_headers()
         self.wfile.write(cuerpo)
@@ -199,6 +228,25 @@ def probar_csv(informe: _Comprobaciones) -> None:
             "un estado desconocido queda pendiente y visitado acepta true, false, 1 y 0",
         )
 
+        ruta.write_text(
+            "url,titulo\n"
+            "https://a.test,Sin título\n"
+            "https://b.test,\n"
+            "https://c.test,Hecho a mano\n",
+            encoding="utf-8-sig",
+        )
+        leidos, sin_url, _por_verificar = datos.leer_csv(ruta)
+        informe.comprobar(
+            sin_url == 0
+            and leidos[0]["titulo"] == ""
+            and leidos[0]["titulo_manual"] is False
+            and leidos[1]["titulo"] == ""
+            and leidos[1]["titulo_manual"] is False
+            and leidos[2]["titulo"] == "Hecho a mano"
+            and leidos[2]["titulo_manual"] is True,
+            "un título importado se marca como manual, y Sin título queda automático",
+        )
+
         ruta.write_text("titulo\nhola\n", encoding="utf-8-sig")
         try:
             datos.leer_csv(ruta)
@@ -254,6 +302,51 @@ def probar_titulo(informe: _Comprobaciones) -> None:
         verificador.extraer_titulo(b"<html><body>sin titulo</body></html>", "utf-8") == "",
         "sin etiqueta title el resultado es vacío",
     )
+    informe.comprobar(
+        verificador.titulo_descriptivo("https://www.example.com/blog/articulo-sobre-python")
+        == "example.com / articulo sobre python",
+        "el título descriptivo usa el dominio sin www y el último segmento",
+    )
+    informe.comprobar(
+        verificador.titulo_descriptivo("https://example.com") == "example.com"
+        and verificador.titulo_descriptivo("https://example.com/") == "example.com",
+        "sin ruta el título descriptivo es el dominio",
+    )
+    informe.comprobar(
+        verificador.titulo_descriptivo("https://www.example.com/a/mi-nota/") == "example.com / mi nota",
+        "la barra final no cuenta como segmento",
+    )
+    informe.comprobar(
+        verificador.titulo_descriptivo("https://example.com/ca%C3%B1%C3%B3n-uno")
+        == "example.com / cañón uno",
+        "el segmento codificado se decodifica",
+    )
+
+    relleno = datos.enlace_nuevo("https://www.example.com/articulo-sobre-python")
+    relleno["titulo"] = "Sin título"
+    relleno["titulo_manual"] = True
+    informe.comprobar(
+        datos.resolver_titulo(relleno, "", "example.com / articulo sobre python")
+        == ("example.com / articulo sobre python", False),
+        "Sin título se sustituye en la siguiente verificación",
+    )
+    manual = datos.enlace_nuevo("https://example.com/a")
+    manual["titulo"] = "Mi título"
+    manual["titulo_manual"] = True
+    informe.comprobar(
+        datos.resolver_titulo(manual, "Otro", "example.com / a") is None,
+        "un título editado a mano no se sustituye",
+    )
+    informe.comprobar(
+        datos.resolver_edicion_titulo("Mi título", "", None, "example.com / a")
+        == ("example.com / a", False)
+        and datos.resolver_edicion_titulo("Automático", "Automático", "Automático", "example.com")
+        == ("Automático", False)
+        and datos.resolver_edicion_titulo("Antes", "Después", None, "example.com")
+        == ("Después", True)
+        and datos.resolver_edicion_titulo("Igual", "Igual", None, "example.com") is None,
+        "guardar el diálogo distingue vacío, obtenido, editado y sin cambios",
+    )
 
 
 def probar_servidor_local(informe: _Comprobaciones) -> None:
@@ -267,6 +360,24 @@ def probar_servidor_local(informe: _Comprobaciones) -> None:
             estado == "activo" and codigo == 200 and titulo == "Título local",
             "si HEAD falla, GET lee el título",
             f"recibido estado={estado} codigo={codigo} titulo={titulo!r}",
+        )
+
+        estado, codigo, titulo = verificador.verificar_url(f"http://127.0.0.1:{puerto}/html")
+        informe.comprobar(
+            estado == "activo" and codigo == 200 and titulo == "Desde HEAD",
+            "si HEAD responde HTML, un GET parcial lee el título",
+            f"recibido estado={estado} codigo={codigo} titulo={titulo!r}",
+        )
+
+        _ServidorLocal.gets_binario = 0
+        estado, codigo, titulo = verificador.verificar_url(f"http://127.0.0.1:{puerto}/binario")
+        informe.comprobar(
+            estado == "activo"
+            and codigo == 200
+            and titulo == ""
+            and _ServidorLocal.gets_binario == 0,
+            "un HEAD que no es HTML no descarga el cuerpo",
+            f"recibido estado={estado} codigo={codigo} titulo={titulo!r} gets={_ServidorLocal.gets_binario}",
         )
     finally:
         servidor.shutdown()

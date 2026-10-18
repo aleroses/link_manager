@@ -75,11 +75,16 @@ def ruta_datos(
     return destino / NOMBRE_ARCHIVO
 
 
+# Texto que la lista muestra si el título aún está vacío. No se guarda.
+TITULO_RELLENO = "Sin título"
+
+
 def enlace_nuevo(url: str) -> dict:
     """Registro vacío, listo para guardarse. La verificación llega después."""
     return {
         "url": url,
         "titulo": "",
+        "titulo_manual": False,
         "estado": "pendiente",
         "codigo_http": None,
         "visitado": False,
@@ -88,6 +93,44 @@ def enlace_nuevo(url: str) -> dict:
         "fecha_añadido": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "ultima_verificacion": None,
     }
+
+
+def resolver_titulo(
+    enlace: dict,
+    titulo_html: str,
+    descriptivo: str,
+) -> tuple[str, bool] | None:
+    """Decide el título tras una verificación.
+
+    Devuelve (titulo, titulo_manual) cuando hay que escribirlo. None
+    conserva el que ya está: un título editado a mano no se pisa. El
+    texto "Sin título" sí se sustituye, aunque la marca estuviera puesta.
+    """
+    actual = str(enlace.get("titulo") or "").strip()
+    if bool(enlace.get("titulo_manual")) and actual != TITULO_RELLENO:
+        return None
+    return (titulo_html.strip() or descriptivo, False)
+
+
+def resolver_edicion_titulo(
+    anterior: str,
+    nuevo: str,
+    obtenido: str | None,
+    descriptivo: str,
+) -> tuple[str, bool] | None:
+    """Decide el título al guardar el diálogo.
+
+    None deja el título y la marca como estaban. Una cadena vacía o
+    "Sin título" pasa al título descriptivo y queda como automática.
+    """
+    texto = nuevo.strip()
+    if not texto or texto == TITULO_RELLENO:
+        return (descriptivo, False)
+    if obtenido is not None and texto == obtenido.strip():
+        return (texto, False)
+    if texto != str(anterior or "").strip():
+        return (texto, True)
+    return None
 
 
 def _ruta_respaldo(ruta: Path) -> Path:
@@ -233,8 +276,9 @@ def leer_csv(ruta: Path) -> tuple[list[dict], int, list[dict]]:
 
     Devuelve (enlaces, filas_sin_url, por_verificar). por_verificar son
     los mismos dicts cuyo estado no era conocido: quedan en pendiente
-    para que la ventana los compruebe. Lanza ValueError si falta la
-    columna url.
+    para que la ventana los compruebe. Un título no vacío, distinto de
+    "Sin título", queda marcado como manual. Lanza ValueError si falta
+    la columna url.
     """
     with ruta.open("r", encoding="utf-8-sig", newline="") as archivo:
         lector = csv.DictReader(archivo)
@@ -252,7 +296,13 @@ def leer_csv(ruta: Path) -> tuple[list[dict], int, list[dict]]:
                 sin_url += 1
                 continue
             enlace = enlace_nuevo(url)
-            enlace["titulo"] = str(fila.get("titulo") or "")
+            titulo = str(fila.get("titulo") or "")
+            if titulo.strip() and titulo.strip() != TITULO_RELLENO:
+                enlace["titulo"] = titulo
+                enlace["titulo_manual"] = True
+            else:
+                enlace["titulo"] = ""
+                enlace["titulo_manual"] = False
             enlace["categoria"] = str(fila.get("categoria") or "").strip()
             enlace["notas"] = str(fila.get("notas") or "")
             estado = str(fila.get("estado") or "").strip()

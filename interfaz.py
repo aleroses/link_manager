@@ -220,6 +220,10 @@ class Aplicacion(ctk.CTk):
         self._cerrando = False
         self._lote = 0
         self._token = 0
+        self._token_titulo = 0
+        self._titulo_obtenido: str | None = None
+        self._campo_titulo: ctk.CTkEntry | None = None
+        self._boton_titulo: ctk.CTkButton | None = None
         # El token evita que un resultado viejo pise uno más reciente
         # del mismo enlace (por ejemplo, añadir y justo después
         # verificar todos).
@@ -582,6 +586,10 @@ class Aplicacion(ctk.CTk):
             _, lote = item
             self._cerrar_trabajo(lote, contado=False)
             return
+        if tipo == "titulo_dialogo":
+            _, dialogo_id, token, texto = item
+            self._aplicar_titulo_dialogo(dialogo_id, token, texto)
+            return
         _, enlace, estado, codigo, titulo, momento, lote, token = item
         self._escribir_resultado(enlace, estado, codigo, titulo, momento, token)
         self._cerrar_trabajo(lote, contado=True)
@@ -734,7 +742,7 @@ class Aplicacion(ctk.CTk):
         self.aviso.configure(text=aviso)
 
     def editar(self, enlace: dict) -> None:
-        """Pide categoría y notas. No toca la URL ni el estado."""
+        """Pide título, categoría y notas. No toca la URL ni el estado."""
         if not self._sigue_en_lista(enlace):
             return
         dialogo = getattr(self, "_dialogo_editar", None)
@@ -748,15 +756,49 @@ class Aplicacion(ctk.CTk):
 
         dialogo = ctk.CTkToplevel(self)
         self._dialogo_editar = dialogo
+        self._titulo_obtenido = None
         dialogo.title("Editar enlace")
         dialogo.resizable(False, False)
         dialogo.configure(fg_color=COLORES["fondo"])
         dialogo.transient(self)
         self.update_idletasks()
-        ancho, alto = 520, 420
+        ancho, alto = 520, 540
         x = self.winfo_rootx() + max(0, (self.winfo_width() - ancho) // 2)
         y = self.winfo_rooty() + max(0, (self.winfo_height() - alto) // 2)
         dialogo.geometry(f"{ancho}x{alto}+{x}+{y}")
+
+        ctk.CTkLabel(
+            dialogo,
+            text="Título",
+            anchor="w",
+            text_color=COLORES["texto"],
+            font=self.fuente_detalle,
+        ).pack(fill="x", padx=24, pady=(20, 6))
+        titulo = ctk.CTkEntry(
+            dialogo,
+            height=36,
+            corner_radius=10,
+            border_width=1,
+            border_color=COLORES["borde"],
+            fg_color=COLORES["barra"],
+            text_color=COLORES["texto"],
+            font=self.fuente_url,
+        )
+        titulo.pack(fill="x", padx=24)
+        titulo.insert(0, str(enlace.get("titulo") or ""))
+        self._campo_titulo = titulo
+        self._boton_titulo = ctk.CTkButton(
+            dialogo,
+            text="Obtener título de nuevo",
+            width=220,
+            height=36,
+            corner_radius=8,
+            fg_color=COLORES["barra"],
+            hover_color=COLORES["borde"],
+            text_color=COLORES["texto"],
+            command=lambda: self._pedir_titulo(enlace, dialogo),
+        )
+        self._boton_titulo.pack(anchor="w", padx=24, pady=(10, 0))
 
         ctk.CTkLabel(
             dialogo,
@@ -764,7 +806,7 @@ class Aplicacion(ctk.CTk):
             anchor="w",
             text_color=COLORES["texto"],
             font=self.fuente_detalle,
-        ).pack(fill="x", padx=24, pady=(20, 6))
+        ).pack(fill="x", padx=24, pady=(14, 6))
         categoria = ctk.CTkEntry(
             dialogo,
             height=36,
@@ -809,7 +851,7 @@ class Aplicacion(ctk.CTk):
             fg_color=COLORES["barra"],
             hover_color=COLORES["borde"],
             text_color=COLORES["texto"],
-            command=dialogo.destroy,
+            command=lambda: self._cerrar_edicion(dialogo),
         ).pack(side="left", padx=(0, 8))
         ctk.CTkButton(
             acciones,
@@ -820,37 +862,109 @@ class Aplicacion(ctk.CTk):
             fg_color=COLORES["acento"],
             hover_color=COLORES["acento_hover"],
             text_color=COLORES["texto_boton"],
-            command=lambda: self._guardar_edicion(enlace, categoria, notas, dialogo),
+            command=lambda: self._guardar_edicion(enlace, titulo, categoria, notas, dialogo),
         ).pack(side="left")
 
-        dialogo.protocol("WM_DELETE_WINDOW", dialogo.destroy)
-        dialogo.bind("<Escape>", lambda _evento: dialogo.destroy())
+        dialogo.protocol("WM_DELETE_WINDOW", lambda: self._cerrar_edicion(dialogo))
+        dialogo.bind("<Escape>", lambda _evento: self._cerrar_edicion(dialogo))
         dialogo.after(50, dialogo.lift)
-        dialogo.after(50, categoria.focus)
+        dialogo.after(50, titulo.focus)
         dialogo.grab_set()
+
+    def _cerrar_edicion(self, dialogo: ctk.CTkToplevel) -> None:
+        self._campo_titulo = None
+        self._boton_titulo = None
+        self._titulo_obtenido = None
+        if getattr(self, "_dialogo_editar", None) is dialogo:
+            self._dialogo_editar = None
+        try:
+            dialogo.destroy()
+        except Exception:
+            pass
+
+    def _pedir_titulo(self, enlace: dict, dialogo: ctk.CTkToplevel) -> None:
+        """Pide el título en segundo plano y lo deja en el campo al volver."""
+        boton = self._boton_titulo
+        if boton is None or self._cerrando:
+            return
+        self._token_titulo += 1
+        token = self._token_titulo
+        boton.configure(state="disabled", text="Obteniendo título...")
+        try:
+            self._ejecutor.submit(
+                self._obtener_titulo_en_segundo_plano,
+                str(enlace.get("url") or ""),
+                id(dialogo),
+                token,
+            )
+        except RuntimeError:
+            boton.configure(state="normal", text="Obtener título de nuevo")
+
+    def _obtener_titulo_en_segundo_plano(self, url: str, dialogo_id: int, token: int) -> None:
+        """Corre fuera del hilo principal. No toca widgets."""
+        try:
+            _estado, _codigo, titulo = verificador.verificar_url(url)
+            texto = titulo.strip() or verificador.titulo_descriptivo(url)
+        except Exception:
+            texto = verificador.titulo_descriptivo(url)
+        self._resultados.put(("titulo_dialogo", dialogo_id, token, texto))
+
+    def _aplicar_titulo_dialogo(self, dialogo_id: int, token: int, texto: str) -> None:
+        if token != self._token_titulo:
+            return
+        dialogo = getattr(self, "_dialogo_editar", None)
+        if dialogo is None or id(dialogo) != dialogo_id:
+            return
+        campo = self._campo_titulo
+        boton = self._boton_titulo
+        if campo is None:
+            return
+        try:
+            if not campo.winfo_exists():
+                return
+            campo.delete(0, "end")
+            campo.insert(0, texto)
+            self._titulo_obtenido = texto
+            if boton is not None and boton.winfo_exists():
+                boton.configure(state="normal", text="Obtener título de nuevo")
+        except Exception:
+            return
 
     def _guardar_edicion(
         self,
         enlace: dict,
+        titulo: ctk.CTkEntry,
         categoria: ctk.CTkEntry,
         notas: ctk.CTkTextbox,
         dialogo: ctk.CTkToplevel,
     ) -> None:
         if not self._sigue_en_lista(enlace):
-            dialogo.destroy()
+            self._cerrar_edicion(dialogo)
             return
+        anterior_titulo = enlace.get("titulo")
+        anterior_manual = enlace.get("titulo_manual")
         anterior_categoria = enlace.get("categoria")
         anterior_notas = enlace.get("notas")
+        decision = datos.resolver_edicion_titulo(
+            str(anterior_titulo or ""),
+            titulo.get(),
+            self._titulo_obtenido,
+            verificador.titulo_descriptivo(str(enlace.get("url") or "")),
+        )
+        if decision is not None:
+            enlace["titulo"], enlace["titulo_manual"] = decision
         enlace["categoria"] = categoria.get().strip()
         enlace["notas"] = notas.get("1.0", "end-1c").strip()
         try:
             datos.guardar_enlaces(self.enlaces, self.ruta)
         except OSError:
+            enlace["titulo"] = anterior_titulo
+            enlace["titulo_manual"] = anterior_manual
             enlace["categoria"] = anterior_categoria
             enlace["notas"] = anterior_notas
             self.aviso.configure(text="No se pudo guardar el enlace.")
             return
-        dialogo.destroy()
+        self._cerrar_edicion(dialogo)
         self.aviso.configure(text="")
         self.refrescar_lista()
 
@@ -1093,7 +1207,13 @@ class Aplicacion(ctk.CTk):
 
         enlace["estado"] = estado
         enlace["codigo_http"] = codigo
-        enlace["titulo"] = titulo
+        decision = datos.resolver_titulo(
+            enlace,
+            titulo,
+            verificador.titulo_descriptivo(str(enlace.get("url") or "")),
+        )
+        if decision is not None:
+            enlace["titulo"], enlace["titulo_manual"] = decision
         enlace["ultima_verificacion"] = momento
         try:
             datos.guardar_enlaces(self.enlaces, self.ruta)
@@ -1106,7 +1226,7 @@ class Aplicacion(ctk.CTk):
     def _presentacion(self, enlace: dict) -> tuple[str, str, str]:
         estado = str(enlace.get("estado") or "pendiente")
         color = COLORES_ESTADO.get(estado, COLORES_ESTADO["pendiente"])
-        titulo = str(enlace.get("titulo") or "").strip() or "Sin título"
+        titulo = str(enlace.get("titulo") or "").strip() or datos.TITULO_RELLENO
         detalle = estado
         categoria = str(enlace.get("categoria") or "").strip()
         if categoria:
