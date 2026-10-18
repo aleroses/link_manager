@@ -9,6 +9,7 @@ categorias y enlaces.
 from __future__ import annotations
 
 import csv
+import io
 import json
 import os
 import shutil
@@ -16,6 +17,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import registro
 import verificador
 
 NOMBRE_ARCHIVO = "enlaces.json"
@@ -63,6 +65,18 @@ def directorio_configuracion() -> Path:
     return Path.home() / ".config" / "gestor-de-enlaces"
 
 
+def directorio_aplicacion() -> Path:
+    """Carpeta del programa. Junto al ejecutable si está empaquetado."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+# La ventana lo lee una vez al arrancar. Las pruebas no dependen de él.
+aviso_carga = ""
+aviso_ruta = ""
+
+
 def _avisar_json_antiguo(base: Path) -> None:
     """Avisa si queda un enlaces.json en la raíz. No lo copia ni lo borra."""
     if not base.is_dir():
@@ -84,8 +98,10 @@ def ruta_datos(
     no es escribible, para no tocar la configuración real durante las
     pruebas. Un enlaces.json en la raíz de base se ignora.
     """
+    global aviso_ruta
+    aviso_ruta = ""
     if base is None:
-        base = Path(__file__).resolve().parent
+        base = directorio_aplicacion()
     carpeta = base / NOMBRE_CARPETA
     try:
         carpeta.mkdir(parents=True, exist_ok=True)
@@ -97,6 +113,10 @@ def ruta_datos(
 
     destino = carpeta_config if carpeta_config is not None else directorio_configuracion()
     destino.mkdir(parents=True, exist_ok=True)
+    aviso_ruta = (
+        "No se puede escribir en la carpeta data del programa. "
+        "Los enlaces se guardan en la carpeta de configuración."
+    )
     _avisar_json_antiguo(base)
     return destino / NOMBRE_ARCHIVO
 
@@ -352,13 +372,34 @@ def _respaldar(ruta: Path) -> bool:
     return True
 
 
+def _dejar_vacio(ruta: Path, motivo: str) -> dict:
+    """Archiva el archivo dañado, si se puede, y anota el motivo."""
+    global aviso_carga
+    copiado = _respaldar(ruta)
+    if copiado:
+        guardar_enlaces(coleccion_vacia(), ruta)
+        aviso_carga = (
+            "El archivo de enlaces estaba dañado. Se guardó una copia .bak "
+            "y se empieza con la lista vacía."
+        )
+    else:
+        aviso_carga = (
+            "El archivo de enlaces estaba dañado y no se pudo guardar una copia .bak."
+        )
+    registro.anotar(f"{aviso_carga} {motivo}")
+    return coleccion_vacia()
+
+
 def cargar_enlaces(ruta: Path | None = None) -> dict:
     """Lee el documento de categorías y enlaces.
 
     Si el archivo no existe, lo crea vacío. Si el JSON no se puede leer,
     es una lista antigua o no es un documento version 2, guarda una
-    copia .bak y deja el archivo en el documento vacío.
+    copia .bak y deja el archivo en el documento vacío. aviso_carga
+    explica ese caso para la ventana.
     """
+    global aviso_carga
+    aviso_carga = ""
     if ruta is None:
         ruta = ruta_datos()
     if not ruta.exists():
@@ -368,10 +409,11 @@ def cargar_enlaces(ruta: Path | None = None) -> dict:
 
     try:
         texto = ruta.read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
-        if _respaldar(ruta):
-            guardar_enlaces(coleccion_vacia(), ruta)
-        return coleccion_vacia()
+    except UnicodeError:
+        return _dejar_vacio(ruta, "la codificación no es UTF-8")
+    except OSError as exc:
+        registro.anotar("No se pudo leer el archivo de enlaces.", exc)
+        raise
 
     try:
         if not texto.strip():
@@ -379,10 +421,8 @@ def cargar_enlaces(ruta: Path | None = None) -> dict:
         datos = json.loads(texto)
         if not _documento_valido(datos):
             raise ValueError("el contenido no es un documento version 2")
-    except (json.JSONDecodeError, ValueError):
-        if _respaldar(ruta):
-            guardar_enlaces(coleccion_vacia(), ruta)
-        return coleccion_vacia()
+    except (json.JSONDecodeError, ValueError) as exc:
+        return _dejar_vacio(ruta, str(exc))
     return datos
 
 
@@ -472,6 +512,19 @@ def escribir_csv(enlaces: list, ruta: Path) -> None:
             )
 
 
+def _texto_csv(ruta: Path) -> str:
+    """Lee el CSV en UTF-8. Si no lo es, prueba la codificación de Windows."""
+    bruto = ruta.read_bytes()
+    for codec in ("utf-8-sig", "cp1252"):
+        try:
+            return bruto.decode(codec)
+        except UnicodeError:
+            continue
+    raise ValueError(
+        "No se pudo leer el CSV. Guárdalo en UTF-8 o en la codificación de Windows."
+    )
+
+
 def leer_csv(ruta: Path) -> tuple[list[dict], int, list[dict]]:
     """Lee enlaces de un CSV.
 
@@ -479,13 +532,15 @@ def leer_csv(ruta: Path) -> tuple[list[dict], int, list[dict]]:
     los mismos dicts cuyo estado no era conocido: quedan en pendiente
     para que la ventana los compruebe. Un título no vacío, distinto de
     "Sin título", queda marcado como manual. Lanza ValueError si falta
-    la columna url.
+    la columna url, si el archivo está mal formado o si la codificación
+    no se reconoce.
     """
-    with ruta.open("r", encoding="utf-8-sig", newline="") as archivo:
-        lector = csv.DictReader(archivo)
+    texto = _texto_csv(ruta)
+    try:
+        lector = csv.DictReader(io.StringIO(texto))
         nombres = [str(nombre or "").strip() for nombre in (lector.fieldnames or [])]
         if "url" not in nombres:
-            raise ValueError("el CSV no tiene la columna url")
+            raise ValueError("El CSV no tiene la columna url.")
         enlaces: list[dict] = []
         sin_url = 0
         por_verificar: list[dict] = []
@@ -520,4 +575,6 @@ def leer_csv(ruta: Path) -> tuple[list[dict], int, list[dict]]:
             ultima = str(fila.get("ultima_verificacion") or "").strip()
             enlace["ultima_verificacion"] = ultima or None
             enlaces.append(enlace)
+    except csv.Error as exc:
+        raise ValueError("El CSV está mal formado.") from exc
     return enlaces, sin_url, por_verificar

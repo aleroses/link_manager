@@ -15,12 +15,25 @@ from __future__ import annotations
 
 import html
 import re
+import threading
 from html.parser import HTMLParser
 from urllib.parse import unquote, urlparse
 
 import requests
 
 TIEMPO_LIMITE = 8
+MOTIVO_SIN_CONEXION = "sin_conexion"
+# Errno de "la red no está" en Linux y los mismos casos en Windows.
+_ERRNO_SIN_RED = {100, 101, 113, 10050, 10051, 10065}
+_TEXTO_SIN_RED = (
+    "network is unreachable",
+    "network unreachable",
+    "net is unreachable",
+    "no route to host",
+    "network is down",
+    "network down",
+)
+_motivo_hilo = threading.local()
 MAX_CUERPO = 65536
 # Cadena fija de navegador. No describe el sistema donde corre la app:
 # solo evita que algunos sitios rechacen un cliente "python-requests".
@@ -137,6 +150,31 @@ def _ultimo_segmento_legible(ruta: str) -> str:
     return re.sub(r"\s+", " ", texto).strip()
 
 
+def motivo_reciente() -> str:
+    """Motivo del último fallo de red en este hilo. Vacío si no lo hubo."""
+    return str(getattr(_motivo_hilo, "motivo", "") or "")
+
+
+def _poner_motivo(motivo: str) -> None:
+    _motivo_hilo.motivo = motivo
+
+
+def es_sin_conexion(exc: BaseException) -> bool:
+    """True si el fallo describe una red caída, no un sitio concreto."""
+    causa: BaseException | None = exc
+    vistos: set[int] = set()
+    while causa is not None and id(causa) not in vistos:
+        vistos.add(id(causa))
+        numero = getattr(causa, "errno", None)
+        if isinstance(numero, int) and numero in _ERRNO_SIN_RED:
+            return True
+        texto = str(causa).lower()
+        if any(marca in texto for marca in _TEXTO_SIN_RED):
+            return True
+        causa = causa.__cause__ or causa.__context__
+    return False
+
+
 def clasificar_codigo(codigo: int) -> str:
     """Traduce un código HTTP al estado que guarda la aplicación."""
     if 200 <= codigo <= 399:
@@ -216,6 +254,7 @@ def verificar_url(url: str) -> tuple[str, int | None, str]:
     una caída de red. Un 403 se queda en "error"; marcarlo como activo
     a mano corresponderá a la interfaz. Sin title el título queda vacío.
     """
+    _poner_motivo("")
     try:
         destino = normalizar_url(url)
     except ValueError:
@@ -267,5 +306,7 @@ def verificar_url(url: str) -> tuple[str, int | None, str]:
                 respuesta.close()
     except requests.exceptions.InvalidURL:
         return ("error", None, "")
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        if es_sin_conexion(exc):
+            _poner_motivo(MOTIVO_SIN_CONEXION)
         return ("caído", None, "")

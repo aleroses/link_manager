@@ -9,6 +9,7 @@ principal lo aplica con after().
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
@@ -21,6 +22,7 @@ import customtkinter as ctk
 from PIL import Image
 
 import datos
+import registro
 import verificador
 
 # Tope de comprobaciones simultáneas. Más hilos no aceleran la red y
@@ -43,7 +45,15 @@ RESERVA_TEXTO_TARJETA = 96
 # Márgenes del resumen de estados dentro de la tarjeta.
 RESERVA_RESUMEN_TARJETA = 48
 
-CARPETA_ICONOS = Path(__file__).resolve().parent / "assets" / "icons"
+def directorio_recursos() -> Path:
+    """Carpeta de los archivos empaquetados. En desarrollo, la del proyecto."""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        return Path(base)
+    return Path(__file__).resolve().parent
+
+
+CARPETA_ICONOS = directorio_recursos() / "assets" / "icons"
 
 # Nombre interno -> archivo Lucide, sin extensión.
 ICONOS = {
@@ -253,8 +263,19 @@ def cargar_iconos(carpeta: Path | None = None) -> dict[str, ctk.CTkImage]:
         imagenes[clave] = ctk.CTkImage(light_image=imagen, dark_image=imagen, size=(20, 20))
     if faltan:
         lista = ", ".join(faltan)
-        raise FileNotFoundError(f"Faltan iconos en {origen}: {lista}")
+        raise FileNotFoundError(
+            "Falta un icono en assets/icons/. "
+            f"No se encuentra: {lista}. "
+            "Restaura esa carpeta o vuelve a instalar la aplicación."
+        )
     return imagenes
+
+
+def _mensaje_permiso(exc: OSError, alternativo: str) -> str:
+    """Mensaje de guardado. Distingue una carpeta sin permisos."""
+    if isinstance(exc, PermissionError) or exc.errno in {1, 13}:
+        return "No se puede escribir en la carpeta de datos. Revisa los permisos."
+    return alternativo
 
 
 class Aplicacion(ctk.CTk):
@@ -264,7 +285,19 @@ class Aplicacion(ctk.CTk):
         super().__init__()
         self.ruta = ruta if ruta is not None else datos.ruta_datos()
         self.iconos = iconos if iconos is not None else cargar_iconos()
-        self.coleccion: dict = datos.cargar_enlaces(self.ruta)
+        self._aviso_inicial = datos.aviso_ruta
+        try:
+            self.coleccion: dict = datos.cargar_enlaces(self.ruta)
+        except OSError as exc:
+            registro.anotar("No se pudo leer la carpeta de datos.", exc)
+            self.coleccion = datos.coleccion_vacia()
+            self._aviso_inicial = _mensaje_permiso(
+                exc,
+                "No se pudo abrir el archivo de enlaces.",
+            )
+        else:
+            if datos.aviso_carga:
+                self._aviso_inicial = datos.aviso_carga
         self._vista = "categorias"
         self._seccion: str | None = None
         # Tk no es seguro entre hilos. El hilo de red solo deja el
@@ -311,6 +344,9 @@ class Aplicacion(ctk.CTk):
         self._construir()
         self._aplicar_vista()
         self.refrescar_lista()
+        if self._aviso_inicial:
+            self.aviso.configure(text=self._aviso_inicial)
+        self._sin_conexion = False
 
     @property
     def enlaces(self) -> list:
@@ -321,7 +357,11 @@ class Aplicacion(ctk.CTk):
         self.coleccion["enlaces"] = valor
 
     def _guardar(self) -> None:
-        datos.guardar_enlaces(self.coleccion, self.ruta)
+        try:
+            datos.guardar_enlaces(self.coleccion, self.ruta)
+        except OSError as exc:
+            registro.anotar("No se pudo guardar el archivo de enlaces.", exc)
+            raise
 
     def _configurar_ventana(self) -> None:
         self.title("Gestor de Enlaces")
@@ -669,9 +709,9 @@ class Aplicacion(ctk.CTk):
         self.enlaces.append(enlace)
         try:
             self._guardar()
-        except OSError:
+        except OSError as exc:
             self.enlaces.pop()
-            self.aviso.configure(text="No se pudo guardar el enlace.")
+            self.aviso.configure(text=_mensaje_permiso(exc, "No se pudo guardar el enlace."))
             return
 
         self.entrada.delete(0, "end")
@@ -724,11 +764,29 @@ class Aplicacion(ctk.CTk):
             estado, codigo, titulo = verificador.verificar_url(url)
             momento = datetime.now(timezone.utc).isoformat(timespec="seconds")
             self._resultados.put(
-                ("resultado", enlace, estado, codigo, titulo, momento, lote, token)
+                (
+                    "resultado",
+                    enlace,
+                    estado,
+                    codigo,
+                    titulo,
+                    momento,
+                    lote,
+                    token,
+                    verificador.motivo_reciente(),
+                )
             )
-        except Exception:
+        except Exception as exc:
+            registro.anotar("Falló la comprobación de un enlace.", exc)
             momento = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            self._resultados.put(("resultado", enlace, "caído", None, "", momento, lote, token))
+            motivo = (
+                verificador.MOTIVO_SIN_CONEXION
+                if verificador.es_sin_conexion(exc)
+                else ""
+            )
+            self._resultados.put(
+                ("resultado", enlace, "caído", None, "", momento, lote, token, motivo)
+            )
 
     def _recoger_resultados(self) -> None:
         """Aplica lo que los hilos de red ya terminaron. Corre en el hilo principal."""
@@ -758,8 +816,9 @@ class Aplicacion(ctk.CTk):
             _, dialogo_id, token, texto = item
             self._aplicar_titulo_dialogo(dialogo_id, token, texto)
             return
-        _, enlace, estado, codigo, titulo, momento, lote, token = item
-        self._escribir_resultado(enlace, estado, codigo, titulo, momento, token)
+        motivo = item[8] if len(item) > 8 else ""
+        _, enlace, estado, codigo, titulo, momento, lote, token = item[:8]
+        self._escribir_resultado(enlace, estado, codigo, titulo, momento, token, motivo, lote)
         self._cerrar_trabajo(lote, contado=True)
 
     def _texto_busqueda(self) -> str:
@@ -887,11 +946,11 @@ class Aplicacion(ctk.CTk):
             self.enlaces.extend(nuevos)
             try:
                 self._guardar()
-            except OSError:
+            except OSError as exc:
                 conservados = {id(item) for item in nuevos}
                 self.enlaces = [item for item in self.enlaces if id(item) not in conservados]
                 self.coleccion["categorias"] = categorias_previas
-                self.aviso.configure(text="No se pudo guardar el enlace.")
+                self.aviso.configure(text=_mensaje_permiso(exc, "No se pudo guardar el enlace."))
                 return
             if not importacion:
                 self.entrada.delete(0, "end")
@@ -1227,8 +1286,8 @@ class Aplicacion(ctk.CTk):
                 abiertos += 1
         try:
             self._guardar()
-        except OSError:
-            self.aviso.configure(text="No se pudo guardar el enlace.")
+        except OSError as exc:
+            self.aviso.configure(text=_mensaje_permiso(exc, "No se pudo guardar el enlace."))
             return
         if abiertos == 0:
             self.aviso.configure(text="No se pudo abrir ninguno.")
@@ -1254,9 +1313,9 @@ class Aplicacion(ctk.CTk):
             self._guardar()
         except datos.ErrorCategoria as exc:
             return str(exc)
-        except OSError:
+        except OSError as exc:
             self.coleccion["categorias"].pop()
-            return "No se pudo guardar."
+            return _mensaje_permiso(exc, "No se pudo guardar.")
         return None
 
     def _renombrar_desde_dialogo(self, anterior: str, texto: str) -> str | None:
@@ -1265,12 +1324,12 @@ class Aplicacion(ctk.CTk):
             self._guardar()
         except datos.ErrorCategoria as exc:
             return str(exc)
-        except OSError:
+        except OSError as exc:
             try:
                 datos.renombrar_categoria(self.coleccion, texto, anterior)
             except datos.ErrorCategoria:
                 pass
-            return "No se pudo guardar."
+            return _mensaje_permiso(exc, "No se pudo guardar.")
         nuevo = texto.strip()
         if self._seccion is not None and self._seccion.casefold() == anterior.strip().casefold():
             self._seccion = nuevo
@@ -1457,12 +1516,12 @@ class Aplicacion(ctk.CTk):
         except datos.ErrorCategoria as exc:
             self.aviso.configure(text=str(exc))
             return
-        except OSError:
+        except OSError as exc:
             self.coleccion["categorias"] = categorias_previas
             self.enlaces = enlaces_previos
             for enlace, categoria in textos:
                 enlace["categoria"] = categoria
-            self.aviso.configure(text="No se pudo guardar el enlace.")
+            self.aviso.configure(text=_mensaje_permiso(exc, "No se pudo guardar el enlace."))
             return
         self.aviso.configure(text="")
         if self._filtro_categoria.casefold() == nombre.strip().casefold():
@@ -1768,13 +1827,13 @@ class Aplicacion(ctk.CTk):
         enlace["notas"] = notas.get("1.0", "end-1c").strip()
         try:
             self._guardar()
-        except OSError:
+        except OSError as exc:
             enlace["titulo"] = anterior_titulo
             enlace["titulo_manual"] = anterior_manual
             enlace["categoria"] = anterior_categoria
             enlace["notas"] = anterior_notas
             self.coleccion["categorias"] = categorias_previas
-            self.aviso.configure(text="No se pudo guardar el enlace.")
+            self.aviso.configure(text=_mensaje_permiso(exc, "No se pudo guardar el enlace."))
             return
         self._cerrar_edicion(dialogo)
         self.aviso.configure(text="")
@@ -1795,8 +1854,9 @@ class Aplicacion(ctk.CTk):
     def _exportar_a(self, ruta: Path) -> None:
         try:
             datos.escribir_csv(self.enlaces, ruta)
-        except OSError:
-            self.aviso.configure(text="No se pudo exportar el CSV.")
+        except OSError as exc:
+            registro.anotar("No se pudo exportar el CSV.", exc)
+            self.aviso.configure(text=_mensaje_permiso(exc, "No se pudo exportar el CSV."))
             return
         cantidad = sum(1 for enlace in self.enlaces if isinstance(enlace, dict))
         self.aviso.configure(text=f"Se exportaron {cantidad} enlaces.")
@@ -1814,11 +1874,13 @@ class Aplicacion(ctk.CTk):
     def _importar_desde(self, ruta: Path) -> None:
         try:
             leidos, sin_url, por_verificar = datos.leer_csv(ruta)
-        except ValueError:
-            self.aviso.configure(text="El CSV no tiene la columna url.")
+        except ValueError as exc:
+            registro.anotar(str(exc))
+            self.aviso.configure(text=str(exc))
             return
-        except OSError:
-            self.aviso.configure(text="No se pudo leer el CSV.")
+        except OSError as exc:
+            registro.anotar("No se pudo leer el CSV.", exc)
+            self.aviso.configure(text=_mensaje_permiso(exc, "No se pudo leer el CSV."))
             return
 
         nuevos: list[dict] = []
@@ -1873,6 +1935,7 @@ class Aplicacion(ctk.CTk):
             return
 
         self._lote += 1
+        self._sin_conexion = False
         lote = self._lote
         cancelar = threading.Event()
         self._cancelar_lote = cancelar
@@ -1957,6 +2020,10 @@ class Aplicacion(ctk.CTk):
         self.boton_cancelar.configure(state="disabled")
         if fallo:
             self.aviso.configure(text="No se pudo guardar el resultado de la verificación.")
+        elif self._sin_conexion:
+            self.aviso.configure(
+                text="No hay conexión a internet. Los enlaces que no respondieron quedan como caídos."
+            )
         elif cancelado:
             self.aviso.configure(
                 text=f"Verificación cancelada. {hechos} de {total} comprobados."
@@ -2005,6 +2072,8 @@ class Aplicacion(ctk.CTk):
         titulo: str,
         momento: str,
         token: int,
+        motivo: str = "",
+        lote: int | None = None,
     ) -> None:
         """Escribe el resultado en la lista. Solo se llama desde el hilo principal."""
         try:
@@ -2029,11 +2098,23 @@ class Aplicacion(ctk.CTk):
         enlace["ultima_verificacion"] = momento
         try:
             self._guardar()
-        except OSError:
+        except OSError as exc:
             self._fallo_al_guardar = True
             if not self._verificacion_masiva:
-                self.aviso.configure(text="No se pudo guardar el resultado de la verificación.")
+                self.aviso.configure(
+                    text=_mensaje_permiso(
+                        exc,
+                        "No se pudo guardar el resultado de la verificación.",
+                    )
+                )
         self._pintar_fila(enlace)
+        if motivo == verificador.MOTIVO_SIN_CONEXION and not self._fallo_al_guardar:
+            if lote is None:
+                self.aviso.configure(
+                    text="No hay conexión a internet. El enlace queda como caído."
+                )
+            else:
+                self._sin_conexion = True
 
     def _presentacion(self, enlace: dict) -> tuple[str, str, str]:
         estado = str(enlace.get("estado") or "pendiente")
@@ -2142,8 +2223,8 @@ class Aplicacion(ctk.CTk):
         enlace["visitado"] = True
         try:
             self._guardar()
-        except OSError:
-            self.aviso.configure(text="No se pudo guardar el enlace.")
+        except OSError as exc:
+            self.aviso.configure(text=_mensaje_permiso(exc, "No se pudo guardar el enlace."))
             return
         self.refrescar_lista()
 
@@ -2248,8 +2329,8 @@ class Aplicacion(ctk.CTk):
         self.enlaces = [item for item in self.enlaces if item is not enlace]
         try:
             self._guardar()
-        except OSError:
-            self.aviso.configure(text="No se pudo guardar el enlace.")
+        except OSError as exc:
+            self.aviso.configure(text=_mensaje_permiso(exc, "No se pudo guardar el enlace."))
             return
         self.aviso.configure(text="")
         self.refrescar_lista()
@@ -2502,6 +2583,41 @@ class Aplicacion(ctk.CTk):
         self._ligar_doble_clic(textos, enlace)
 
 
+def report_callback_exception(self, tipo, valor, traza) -> None:
+        """Un fallo de un botón se anota. La ventana sigue abierta."""
+        registro.anotar("Error en la ventana.", valor if isinstance(valor, BaseException) else None)
+        try:
+            self.aviso.configure(
+                text="Ocurrió un error. El detalle está en gestor.log, junto a los datos."
+            )
+        except Exception:
+            pass
+
+
+Aplicacion.report_callback_exception = report_callback_exception
+
+
+def _instalar_ganchos() -> None:
+    """Manda al registro lo que, si no, saldría como traceback."""
+
+    def _sistema(tipo, valor, traza) -> None:
+        if issubclass(tipo, KeyboardInterrupt):
+            sys.__excepthook__(tipo, valor, traza)
+            return
+        registro.anotar("Error no esperado.", valor if isinstance(valor, BaseException) else None)
+
+    def _hilo(args: threading.ExceptHookArgs) -> None:
+        if args.exc_type is SystemExit:
+            return
+        registro.anotar(
+            "Error en un hilo.",
+            args.exc_value if isinstance(args.exc_value, BaseException) else None,
+        )
+
+    sys.excepthook = _sistema
+    threading.excepthook = _hilo
+
+
 def _mostrar_error(mensaje: str) -> None:
     ventana = ctk.CTk()
     ventana.title("Gestor de Enlaces")
@@ -2520,12 +2636,33 @@ def _mostrar_error(mensaje: str) -> None:
 
 
 def iniciar(ruta: Path | None = None) -> None:
-    """Abre la ventana. Si faltan iconos, muestra el motivo y no sigue."""
+    """Abre la ventana. Un fallo de arranque se explica, no se muestra el traceback."""
     ctk.set_appearance_mode("dark")
+    try:
+        destino = ruta if ruta is not None else datos.ruta_datos()
+        registro.iniciar(destino.parent)
+    except OSError as exc:
+        registro.anotar("No se pudo abrir el registro.", exc)
+        _mostrar_error("No se puede escribir en la carpeta de datos. Revisa los permisos.")
+        return
+    _instalar_ganchos()
     try:
         iconos = cargar_iconos()
     except FileNotFoundError as exc:
+        registro.anotar(str(exc), exc)
         _mostrar_error(str(exc))
         return
-    aplicacion = Aplicacion(ruta=ruta, iconos=iconos)
-    aplicacion.mainloop()
+    except Exception as exc:
+        registro.anotar("No se pudieron cargar los iconos.", exc)
+        _mostrar_error(
+            "No se pudo abrir la ventana. El detalle está en gestor.log, junto a los datos."
+        )
+        return
+    try:
+        aplicacion = Aplicacion(ruta=destino, iconos=iconos)
+        aplicacion.mainloop()
+    except Exception as exc:
+        registro.anotar("No se pudo abrir la ventana.", exc)
+        _mostrar_error(
+            "No se pudo abrir la ventana. El detalle está en gestor.log, junto a los datos."
+        )

@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import datos
+import registro
 import verificador
 
 
@@ -147,7 +148,8 @@ def probar_persistencia(informe: _Comprobaciones) -> None:
             and respaldo.is_file()
             and respaldo.read_text(encoding="utf-8") == original
             and json.loads(ruta.read_text(encoding="utf-8")) == datos.coleccion_vacia()
-            and not list(base.glob("*.tmp")),
+            and not list(base.glob("*.tmp"))
+            and "copia .bak" in datos.aviso_carga,
             "un JSON corrupto se copia a .bak y el archivo queda vacío",
         )
 
@@ -440,6 +442,54 @@ def probar_csv(informe: _Comprobaciones) -> None:
         else:
             informe.comprobar(False, "un CSV sin columna url se rechaza")
 
+        ruta.write_bytes("url,titulo\nhttps://a.test,cañón\n".encode("cp1252"))
+        leidos, _sin_url, _por_verificar = datos.leer_csv(ruta)
+        informe.comprobar(
+            leidos[0]["titulo"] == "cañón",
+            "un CSV en la codificación de Windows se lee igual",
+        )
+
+        ruta.write_text("url\n" + ("x" * 140000) + "\n", encoding="utf-8")
+        try:
+            datos.leer_csv(ruta)
+        except ValueError as exc:
+            informe.comprobar(
+                "mal formado" in str(exc),
+                "un CSV mal formado se rechaza con un mensaje claro",
+            )
+        else:
+            informe.comprobar(False, "un CSV mal formado se rechaza con un mensaje claro")
+
+        ruta.write_bytes(b"\x81\x81")
+        try:
+            datos.leer_csv(ruta)
+        except ValueError as exc:
+            informe.comprobar(
+                "UTF-8" in str(exc),
+                "un CSV con una codificación desconocida se rechaza",
+            )
+        else:
+            informe.comprobar(False, "un CSV con una codificación desconocida se rechaza")
+
+
+def probar_diagnostico(informe: _Comprobaciones) -> None:
+    fallo = OSError("network is unreachable")
+    fallo.errno = 101
+    informe.comprobar(
+        verificador.es_sin_conexion(fallo)
+        and not verificador.es_sin_conexion(TimeoutError("timed out")),
+        "una red caída se distingue de un sitio que no responde",
+    )
+    with tempfile.TemporaryDirectory() as carpeta:
+        registro.iniciar(Path(carpeta))
+        registro.anotar("fallo de prueba")
+        texto = (Path(carpeta) / "gestor.log").read_text(encoding="utf-8")
+        registro.cerrar()
+        informe.comprobar(
+            "fallo de prueba" in texto,
+            "el registro escribe gestor.log y se puede cerrar",
+        )
+
 
 def probar_normalizacion(informe: _Comprobaciones) -> None:
     informe.comprobar(
@@ -672,6 +722,7 @@ def probar_columnas(informe: _Comprobaciones) -> None:
             enlace["categoria"] = "" if indice % 6 == 0 else nombres[indice % len(nombres)]
             coleccion["enlaces"].append(enlace)
         datos.guardar_enlaces(coleccion, ruta)
+        datos.aviso_ruta = ""
         app = interfaz.Aplicacion(ruta=ruta)
         try:
             app.minsize(400, 400)
@@ -781,6 +832,8 @@ def main() -> int:
     probar_columnas(informe)
     print("CSV")
     probar_csv(informe)
+    print("Diagnóstico")
+    probar_diagnostico(informe)
     print("Normalización")
     probar_normalizacion(informe)
     print("Título")
@@ -800,4 +853,11 @@ if __name__ == "__main__":
         sys.exit(main())
     from interfaz import iniciar
 
-    iniciar()
+    try:
+        iniciar()
+    except Exception:
+        print(
+            "No se pudo abrir Gestor de Enlaces. El detalle está en data/gestor.log.",
+            file=sys.stderr,
+        )
+        sys.exit(1)

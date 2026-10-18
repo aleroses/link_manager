@@ -411,5 +411,55 @@ Ninguno de ejecución. `python main.py --probar` terminó con 53 pruebas correct
 
 ### Pendientes
 
-- Resto del pulido y notas de PyInstaller (fase 7).
 - Crear la rama `debian` al validar en Linux.
+
+## 2026-10-18 — Fase 8: Pulido y compatibilidad
+
+### Qué se hizo
+
+Los fallos que el usuario puede encontrarse se explican en español y el programa no se cierra con un traceback. El detalle va a `data/gestor.log`, rotativo, de 256 KB y con dos copias. Se revisó el código y la compatibilidad entre Windows y Debian, y el README explica cómo generar el ejecutable en los dos sistemas. En este equipo se generó y se abrió el de Windows.
+
+### Decisiones técnicas y por qué
+
+- `registro.py` usa `RotatingFileHandler` de la biblioteca estándar. `anotar` no hace nada si el registro no se abrió, para que `python main.py --probar` pueda cargar un JSON dañado sin crear `gestor.log` en el proyecto. El archivo se abre al arrancar la ventana, en la misma carpeta que el JSON.
+- `directorio_aplicacion` usa la carpeta del ejecutable cuando `sys.frozen` está activo. Los iconos salen de `sys._MEIPASS` en ese caso y de la carpeta del proyecto en desarrollo. `data/` queda junto al ejecutable, no dentro de la carpeta temporal del paquete.
+- Un JSON dañado sigue archivándose en `.bak` y sustituyéndose por el documento vacío. `aviso_carga` guarda la frase que muestra la ventana. Si no se puede leer el archivo por permisos, la ventana avisa y muestra la lista vacía, sin reescribir el archivo.
+- El CSV se lee en bytes. Primero se prueba UTF-8 con BOM y, si no vale, cp1252. Una codificación distinta o un campo que el lector no puede parsear (`csv.Error`) se convierte en `ValueError` con una frase en español. La exportación no cambia: sigue en UTF-8 con BOM.
+- `verificar_url` sigue devolviendo tres valores. El motivo "sin conexión" vive en un `threading.local`, porque hay hasta 8 hilos. Se considera red caída el errno 100, 101 o 113 (Linux) y 10050, 10051 o 10065 (Windows), o un texto del estilo "network is unreachable". Un dominio que no existe sigue en caído, sin ese aviso. En una tanda, el aviso sale una vez al terminar.
+- `sys.excepthook`, `threading.excepthook` y `report_callback_exception` anotan el fallo y dejan una frase en la ventana. Solo se instalan en `iniciar`, no al importar, para no cambiar las pruebas. `main.py` atrapa lo que escape de `iniciar` y escribe una línea en stderr, sin traceback.
+
+### Revisión de compatibilidad
+
+- Rutas con `pathlib` en datos, iconos, CSV, registro y el ejecutable empaquetado. No hay rutas con barras fijas de un solo sistema.
+- Los archivos de texto se abren con codificación explícita: UTF-8 el JSON, UTF-8 con BOM la exportación CSV, UTF-8 o cp1252 la importación, UTF-8 el registro. Los PNG se abren en binario.
+- El portapapeles usa `clipboard_clear` y `clipboard_append` de Tk, que sirven en Windows y en Debian.
+- Importar y exportar usan `tkinter.filedialog` con `parent=self`.
+- Las fuentes son `CTkFont`, sin una familia exclusiva de Windows. El recorte de texto mide la fuente ya escalada con el escalado de ventana.
+- En pantallas HiDPI, CustomTkinter escala la ventana y los iconos se cargan a 40 px para mostrarse a 20 px con `CTkImage`.
+- El ejecutable distingue la carpeta de recursos (`_MEIPASS/assets/icons`) de la carpeta de datos (junto al programa).
+
+### Revisión del código
+
+Se añadieron funciones cortas para el registro, el directorio de la aplicación, el aviso de carga, la lectura del CSV y el motivo de red. Los nombres siguen en español, como el resto del proyecto. No se borró comportamiento que las pruebas cubren. El registro no se abre durante `--probar`.
+
+### Archivos creados o modificados
+
+- `registro.py`
+- `datos.py`
+- `verificador.py`
+- `interfaz.py`
+- `main.py`
+- `.gitignore` (`build/`, `dist/`, `*.spec`)
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+En Python 3.14 el lector de CSV acepta una comilla sin cerrar y no lanza `csv.Error`. La prueba de archivo mal formado usa un campo por encima del límite del lector, que sí lanza ese error y la ventana lo traduce a "El CSV está mal formado."
+
+`python main.py --probar` terminó con 58 pruebas correctas y 0 fallos. El ejecutable de Windows se generó con PyInstaller. Al abrirlo, creó `dist/GestorDeEnlaces/data/enlaces.json` y `data/gestor.log` junto al programa, y los iconos quedaron dentro del paquete, en `_internal/assets/icons/`.
+
+### Pendientes
+
+- Crear la rama `debian` al validar en Linux.
+- Generar el ejecutable en Debian con el comando del README. En esta fase solo se probó el de Windows.

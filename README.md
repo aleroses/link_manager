@@ -95,12 +95,13 @@ link_manager/
   interfaz.py         Ventana oscura, lista, filtro y resumen
   datos.py            Carga y guardado de data/enlaces.json y CSV
   verificador.py      Normalización de URL y comprobación HTTP
+  registro.py         gestor.log rotativo, junto a los datos
   requirements.txt    Dependencias con versión fijada
   README.md           Esta guía
   DOCUMENTACION.md    Diario de decisiones por fase
   .gitignore
   assets/icons/       SVG Lucide y PNG a 20 px y 40 px
-  data/               enlaces.json local; no se versiona
+  data/               enlaces.json y gestor.log; no se versiona
   venv/               Entorno local; no se versiona
 ```
 
@@ -119,7 +120,9 @@ Al abrir la ventana, si todavía no existe el archivo, se crea un documento vac�
 { "version": 2, "categorias": [], "enlaces": [] }
 ```
 
-Una categoría guardada tiene `nombre` y `fecha_creacion`. El nombre conserva las mayúsculas con las que se creó. Cada enlace sigue llevando `categoria`: el texto vacío es Sin categoría. Si el archivo no se puede leer, es una lista antigua o no tiene esa forma, se copia a un `.bak` y el archivo de trabajo queda en el documento vacío. Las pruebas de `python main.py --probar` usan una carpeta temporal y no escriben ese archivo en el proyecto.
+Una categoría guardada tiene `nombre` y `fecha_creacion`. El nombre conserva las mayúsculas con las que se creó. Cada enlace sigue llevando `categoria`: el texto vacío es Sin categoría. Si el archivo no se puede leer, es una lista antigua o no tiene esa forma, se copia a un `.bak`, el archivo de trabajo queda en el documento vacío y la ventana lo dice. Si `data/` no se puede escribir, el aviso indica que los enlaces pasan a la carpeta de configuración. Las pruebas de `python main.py --probar` usan una carpeta temporal y no escriben ese archivo en el proyecto.
+
+Los fallos se anotan en `data/gestor.log` (o junto al JSON, si los datos están en la carpeta de configuración). El archivo rota al llegar a 256 KB y conserva dos copias. Un error inesperado no cierra la ventana con un traceback: queda una frase en español y el detalle en el registro.
 
 Cada enlace tendrá: `url`, `titulo`, `titulo_manual`, `estado`, `codigo_http`, `visitado`, `categoria`, `notas`, `fecha_añadido`, `ultima_verificacion`.
 
@@ -129,7 +132,7 @@ Estados del enlace: `pendiente`, `activo` (HTTP 200-399), `error` (HTTP 4xx/5xx 
 
 ## Formato del CSV
 
-Importar y exportar usan las mismas columnas, en UTF-8 con BOM. La única obligatoria es `url`. Si esa columna no está, el archivo se rechaza y la lista sigue igual. Las demás pueden omitirse:
+Importar y exportar usan las mismas columnas. La exportación escribe UTF-8 con BOM. La importación acepta también la codificación de Windows (cp1252). Si el archivo no es ninguna de las dos, está mal formado o no tiene la columna `url`, se rechaza con un mensaje y la lista sigue igual. Las demás columnas pueden omitirse:
 
 - `titulo`
 - `estado`
@@ -169,7 +172,8 @@ Hasta esta fase:
 - Filtrar por estado y, a la vez, por categoría (Todas, Sin categoría o una de las guardadas).
 - Resumen fijo de toda la colección: "12 activos, 3 caídos, 2 errores, 5 pendientes".
 - Reintentar caídos, con el mismo tope de 8 comprobaciones y la misma barra de progreso.
-- Importar y exportar CSV. Exportar incluye toda la colección. Importar añade los nuevos, se salta los repetidos y crea las categorías que falten.
+- Importar y exportar CSV. Exportar incluye toda la colección. Importar añade los nuevos, se salta los repetidos y crea las categorías que falten. Un CSV mal formado o en una codificación no reconocida se rechaza sin cambiar la lista.
+- Avisos en español cuando no hay conexión a internet, el JSON está dañado, la carpeta de datos no se puede escribir, el CSV no se puede leer o falta un icono en `assets/icons/`. El detalle queda en `data/gestor.log`.
 
 ## Ramas
 
@@ -206,3 +210,31 @@ git checkout windows
 **Aparece un archivo `.bak`.** El JSON no se pudo leer. La copia conserva el contenido anterior y queda junto a `data/enlaces.json`. El archivo de trabajo se reescribe como documento vacío para que el programa pueda seguir. No borres el `.bak` hasta recuperar lo que te interese.
 
 **La ventana está vacía y el `enlaces.json` de la raíz sigue ahí.** Esa copia es de una versión anterior. El programa la ignora y usa `data/enlaces.json`. Para recuperar esos enlaces hay que pasarlos a mano al archivo de `data/`.
+
+**La ventana dice que no hay conexión.** El equipo no llega a la red. Los enlaces que no respondieron quedan como caídos. Cuando vuelva la conexión, Reintentar caídos los comprueba otra vez. Un sitio concreto que no responde no muestra este aviso.
+
+**La ventana dice que no se puede escribir en la carpeta de datos.** Revisa los permisos de `data/`, o de la carpeta de configuración si el programa ya avisó que guarda ahí. El detalle está en `gestor.log`, en esa misma carpeta.
+
+## Crear un ejecutable
+
+PyInstaller no está en `requirements.txt`: solo hace falta para empaquetar. Con el entorno activado, en la carpeta del proyecto:
+
+```powershell
+pip install pyinstaller
+```
+
+En Windows el separador de `--add-data` es `;`. Los iconos entran en el paquete y los datos no:
+
+```powershell
+pyinstaller --noconfirm --windowed --name GestorDeEnlaces --collect-all customtkinter --collect-all PIL --add-data "assets/icons;assets/icons" main.py
+```
+
+En Debian el separador es `:` y el comando es el mismo en lo demás:
+
+```bash
+pyinstaller --noconfirm --windowed --name GestorDeEnlaces --collect-all customtkinter --collect-all PIL --add-data "assets/icons:assets/icons" main.py
+```
+
+El resultado queda en `dist/GestorDeEnlaces/`. En Windows el programa es `GestorDeEnlaces.exe`. En Debian es `GestorDeEnlaces`, sin extensión. `assets/icons/` viaja dentro del paquete. `data/enlaces.json` y `data/gestor.log` se crean junto al ejecutable la primera vez que se abre, no dentro del paquete: así no se borran al volver a generarlo. Si esa carpeta no se puede escribir, los dos archivos pasan a la carpeta de configuración del usuario, la misma de la sección "Dónde se guardan los enlaces". `--windowed` no abre consola; un fallo de arranque se lee en `gestor.log`.
+
+`build/`, `dist/` y el archivo `.spec` no se versionan.
