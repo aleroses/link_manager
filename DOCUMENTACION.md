@@ -382,3 +382,34 @@ Ninguno de ejecución. `python main.py --probar` terminó con 47 pruebas correct
 
 - Resto del pulido y notas de PyInstaller (fase 7).
 - Crear la rama `debian` al validar en Linux.
+
+## 2026-10-18 — Fase 7C: Diseño adaptable
+
+### Qué se hizo
+
+La lista de Todos los enlaces, la lista dentro de una categoría y la cuadrícula de tarjetas se reparten en columnas según el ancho del contenedor. Una ventana estrecha queda en una columna. Los enlaces pasan a dos cuando el contenedor llega a 960 px, cerca de 1000 px de ventana. Las tarjetas pueden llegar a tres a partir de 1440 px. El título, la URL y la primera línea de notas se cortan con puntos suspensivos, y los botones de cada fila siguen visibles y alineados.
+
+### Decisiones técnicas y por qué
+
+- El número de columnas lo calcula `columnas_para_ancho` con el ancho del canvas de la lista, no con el de la pantalla. El mínimo está en `ANCHO_MINIMO_COLUMNA` (480). Hace falta el doble de ese mínimo para abrir la segunda columna, y el triple para la tercera. `MAX_COLUMNAS_ENLACES` es 2 y `MAX_COLUMNAS_TARJETAS` es 3. Si hay menos elementos que columnas, no se deja una columna vacía: cuatro tarjetas en una pantalla ancha quedan tres y luego una, alineada con la primera.
+- En una pantalla de 1366 px el contenedor se queda alrededor de 1320 px, así que las tarjetas llegan a dos columnas. La tercera aparece cuando el contenedor mide al menos 1440 px.
+- El `<Configure>` del canvas se enlaza con `add="+"` para no quitar el ajuste de ancho que ya hace el marco con scroll. Si el ancho no cambió, no se hace nada. Si cambió, se espera `DEBOUNCE_REDIMENSION_MS` (150) y solo se reconstruye la rejilla cuando el número de columnas es distinto. Si no, se vuelven a recortar los textos. `_al_cerrar` cancela esa espera.
+- `refrescar_lista` sigue guardando la fracción de scroll y no toca el filtro, la búsqueda ni el menú de categoría. El cambio de columnas pasa por ahí.
+- Las columnas comparten el ancho con `grid` y `uniform`, el mismo peso en cada una. En la fila, el icono de visitado ocupa su columna aunque no se vea, y los cuatro botones quedan en la siguiente. Así se alinean entre filas en los dos modos.
+- El recorte usa la fuente ya escalada de la ventana y un presupuesto que reserva el punto, el hueco de visitado y los botones. El resumen de estados de la tarjeta sigue en varias líneas, con un `wraplength` del ancho de la columna.
+
+### Archivos creados o modificados
+
+- `interfaz.py`
+- `main.py`
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+Ninguno de ejecución. `python main.py --probar` terminó con 53 pruebas correctas y 0 fallos: los límites 959, 960, 1439 y 1440, el recorte con puntos suspensivos, y una ventana temporal en la que las tarjetas y la lista siguen el ancho medido del contenedor. Al ensanchar, el filtro Activo y la fracción de scroll se mantuvieron.
+
+### Pendientes
+
+- Resto del pulido y notas de PyInstaller (fase 7).
+- Crear la rama `debian` al validar en Linux.

@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import filedialog
+from tkinter.font import Font as FuenteTk
 
 import customtkinter as ctk
 from PIL import Image
@@ -29,6 +30,18 @@ HILOS_VERIFICACION = 8
 PAUSA_CIERRE_PROGRESO_MS = 700
 # A partir de esta cantidad, Abrir todos pide confirmación.
 UMBRAL_ABRIR_TODOS = 5
+# Ancho mínimo de una columna. Con 480, la lista pasa a dos columnas
+# cuando el contenedor llega a 960 px, cerca de 1000 px de ventana.
+ANCHO_MINIMO_COLUMNA = 480
+MAX_COLUMNAS_ENLACES = 2
+MAX_COLUMNAS_TARJETAS = 3
+DEBOUNCE_REDIMENSION_MS = 150
+# Punto, hueco de visitado, cuatro botones y márgenes de la fila.
+RESERVA_TEXTO_FILA = 292
+# Icono de carpeta y márgenes del nombre en la tarjeta.
+RESERVA_TEXTO_TARJETA = 96
+# Márgenes del resumen de estados dentro de la tarjeta.
+RESERVA_RESUMEN_TARJETA = 48
 
 CARPETA_ICONOS = Path(__file__).resolve().parent / "assets" / "icons"
 
@@ -100,6 +113,41 @@ FILTROS = (
 _CLAVE_FILTRO = {etiqueta: clave for etiqueta, clave in FILTROS}
 ETIQUETA_SIN_CATEGORIA = "Sin categoría"
 ETIQUETA_NUEVA_ALTA = "Nueva categoría..."
+
+
+def columnas_para_ancho(ancho: int, minimo: int, maximo: int) -> int:
+    """Cuántas columnas caben en ancho, entre 1 y maximo.
+
+    Hace falta el doble del mínimo para abrir la segunda columna.
+    """
+    if maximo < 1 or minimo <= 0 or ancho < minimo * 2:
+        return 1
+    return max(1, min(maximo, ancho // minimo))
+
+
+def recortar_texto(texto: str, medir, ancho: int) -> str:
+    """Devuelve el texto, o un corte con ... si no cabe en ancho píxeles.
+
+    medir(cadena) devuelve el ancho en píxeles de esa cadena.
+    """
+    if ancho <= 0:
+        return ""
+    if medir(texto) <= ancho:
+        return texto
+    puntos = "..."
+    if medir(puntos) > ancho:
+        return ""
+    bajo = 0
+    alto = len(texto)
+    while bajo < alto:
+        medio = (bajo + alto + 1) // 2
+        if medir(texto[:medio] + puntos) <= ancho:
+            bajo = medio
+        else:
+            alto = medio - 1
+    if bajo <= 0:
+        return puntos if medir(puntos) <= ancho else ""
+    return texto[:bajo] + puntos
 
 
 def _palabra(cantidad: int, singular: str, plural: str) -> str:
@@ -246,6 +294,11 @@ class Aplicacion(ctk.CTk):
         self._pendientes_lote = 0
         self._fallo_al_guardar = False
         self._filas: dict[int, dict] = {}
+        self._recortes: list[dict] = []
+        self._fuentes_medida: dict[tuple, FuenteTk] = {}
+        self._columnas = 1
+        self._ancho_lista = 0
+        self._after_redimension: str | None = None
         self._after_resultados: str | None = None
         self._after_ocultar: str | None = None
         self._filtro = "todos"
@@ -592,6 +645,7 @@ class Aplicacion(ctk.CTk):
             scrollbar_button_hover_color=COLORES["secundario"],
         )
         self.lista.pack(fill="both", expand=True, padx=16, pady=(8, 16))
+        self.lista._parent_canvas.bind("<Configure>", self._al_redimensionar_lista, add="+")
         self.entrada.focus_set()
         self._after_resultados = self.after(100, self._recoger_resultados)
 
@@ -986,14 +1040,14 @@ class Aplicacion(ctk.CTk):
         self.menu_categoria.pack(side="left")
 
     def _pintar_tarjetas(self) -> None:
-        rejilla = ctk.CTkFrame(self.lista, fg_color="transparent")
-        rejilla.pack(fill="x", padx=4, pady=4)
-        rejilla.grid_columnconfigure((0, 1), weight=1)
         fichas: list[tuple[str, bool]] = [("", False)]
         for nombre in self._nombres_categoria():
             fichas.append((nombre, True))
+        columnas = self._columnas_actuales(len(fichas))
+        self._columnas = columnas
+        rejilla = self._rejilla(columnas)
         for indice, (nombre, editable) in enumerate(fichas):
-            self._crear_tarjeta(rejilla, nombre, editable, indice)
+            self._crear_tarjeta(rejilla, nombre, editable, indice, columnas)
 
     def _crear_tarjeta(
         self,
@@ -1001,10 +1055,17 @@ class Aplicacion(ctk.CTk):
         nombre: str,
         editable: bool,
         indice: int,
+        columnas: int,
     ) -> None:
         enlaces = self._enlaces_de(nombre)
         tarjeta = ctk.CTkFrame(padre, fg_color=COLORES["fila"], corner_radius=12)
-        tarjeta.grid(row=indice // 2, column=indice % 2, sticky="nsew", padx=8, pady=8)
+        tarjeta.grid(
+            row=indice // columnas,
+            column=indice % columnas,
+            sticky="nsew",
+            padx=8,
+            pady=8,
+        )
 
         cabecera = ctk.CTkFrame(tarjeta, fg_color="transparent")
         cabecera.pack(fill="x", padx=16, pady=(14, 4))
@@ -1014,14 +1075,21 @@ class Aplicacion(ctk.CTk):
             image=self.iconos["carpeta"],
             fg_color="transparent",
         ).pack(side="left", padx=(0, 8))
-        ctk.CTkLabel(
+        etiqueta_nombre = ctk.CTkLabel(
             cabecera,
-            text="Sin categoría" if not nombre else nombre,
+            text="",
             anchor="w",
             text_color=COLORES["texto"],
             font=self.fuente_titulo,
             fg_color="transparent",
-        ).pack(side="left", fill="x", expand=True)
+        )
+        etiqueta_nombre.pack(side="left", fill="x", expand=True)
+        self._registrar_recorte(
+            etiqueta_nombre,
+            "Sin categoría" if not nombre else nombre,
+            self.fuente_titulo,
+            RESERVA_TEXTO_TARJETA,
+        )
         ctk.CTkLabel(
             tarjeta,
             text=_palabra(len(enlaces), "enlace", "enlaces"),
@@ -1030,16 +1098,23 @@ class Aplicacion(ctk.CTk):
             font=self.fuente_url,
             fg_color="transparent",
         ).pack(fill="x", padx=16)
-        ctk.CTkLabel(
+        resumen = ctk.CTkLabel(
             tarjeta,
             text=texto_resumen(enlaces),
             anchor="w",
             justify="left",
-            wraplength=340,
             text_color=COLORES["secundario"],
             font=self.fuente_detalle,
             fg_color="transparent",
-        ).pack(fill="x", padx=16, pady=(4, 8))
+        )
+        resumen.pack(fill="x", padx=16, pady=(4, 8))
+        self._registrar_recorte(
+            resumen,
+            texto_resumen(enlaces),
+            self.fuente_detalle,
+            RESERVA_RESUMEN_TARJETA,
+            envolver=True,
+        )
 
         acciones = ctk.CTkFrame(tarjeta, fg_color="transparent")
         acciones.pack(fill="x", padx=12, pady=(0, 12))
@@ -1909,7 +1984,7 @@ class Aplicacion(ctk.CTk):
         self._cerrando = True
         if self._cancelar_lote is not None:
             self._cancelar_lote.set()
-        for identificador in (self._after_resultados, self._after_ocultar):
+        for identificador in (self._after_resultados, self._after_ocultar, self._after_redimension):
             if identificador is None:
                 continue
             try:
@@ -1987,8 +2062,9 @@ class Aplicacion(ctk.CTk):
         if visible and en_pantalla and info is not None:
             titulo, detalle, color = self._presentacion(enlace)
             info["punto"].configure(fg_color=color)
-            info["titulo"].configure(text=titulo)
-            info["detalle"].configure(text=detalle, text_color=color)
+            self._actualizar_recorte(info["titulo"], titulo)
+            self._actualizar_recorte(info["detalle"], detalle)
+            info["detalle"].configure(text_color=color)
             return
         if visible != en_pantalla:
             self.refrescar_lista()
@@ -2006,6 +2082,7 @@ class Aplicacion(ctk.CTk):
             fraccion = 0.0
 
         self._filas = {}
+        self._recortes = []
         for hijo in self.lista.winfo_children():
             hijo.destroy()
         self._rehacer_menu_alta()
@@ -2034,6 +2111,7 @@ class Aplicacion(ctk.CTk):
         else:
             mensaje = ""
         if mensaje:
+            self._columnas = self._columnas_actuales(0)
             ctk.CTkLabel(
                 self.lista,
                 text=mensaje,
@@ -2042,8 +2120,7 @@ class Aplicacion(ctk.CTk):
                 fg_color="transparent",
             ).pack(anchor="w", padx=8, pady=28)
         else:
-            for enlace in visibles:
-                self._crear_fila(enlace)
+            self._pintar_rejilla_enlaces(visibles)
         self._pintar_resumen()
         self._rehacer_menu_categoria()
         try:
@@ -2195,12 +2272,148 @@ class Aplicacion(ctk.CTk):
         for hijo in widget.winfo_children():
             self._ligar_doble_clic(hijo, enlace)
 
-    def _crear_fila(self, enlace: dict) -> None:
+    def _ancho_contenedor(self) -> int:
+        try:
+            return int(self.lista._parent_canvas.winfo_width())
+        except Exception:
+            return 0
+
+    def _columnas_actuales(self, cantidad: int) -> int:
+        maximo = MAX_COLUMNAS_TARJETAS if self._mostrando_tarjetas() else MAX_COLUMNAS_ENLACES
+        calculadas = columnas_para_ancho(
+            self._ancho_contenedor(),
+            ANCHO_MINIMO_COLUMNA,
+            maximo,
+        )
+        if cantidad > 0:
+            return min(calculadas, cantidad)
+        return calculadas
+
+    def _cantidad_celdas(self) -> int:
+        if self._mostrando_tarjetas():
+            return 1 + len(self._nombres_categoria())
+        consulta = self._categoria_consulta()
+        return sum(
+            1
+            for enlace in self.enlaces
+            if isinstance(enlace, dict)
+            and coincide(enlace, self._filtro, self._texto_busqueda(), consulta)
+        )
+
+    def _al_redimensionar_lista(self, evento) -> None:
+        if self._cerrando or evento.widget is not self.lista._parent_canvas:
+            return
+        ancho = int(evento.width)
+        if ancho <= 1 or ancho == self._ancho_lista:
+            return
+        self._ancho_lista = ancho
+        if self._after_redimension is not None:
+            try:
+                self.after_cancel(self._after_redimension)
+            except Exception:
+                pass
+        self._after_redimension = self.after(DEBOUNCE_REDIMENSION_MS, self._aplicar_columnas)
+
+    def _aplicar_columnas(self) -> None:
+        """Rehace la rejilla solo si cambia el número de columnas."""
+        self._after_redimension = None
+        if self._cerrando:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        nuevas = self._columnas_actuales(self._cantidad_celdas())
+        if nuevas != self._columnas:
+            self.refrescar_lista()
+            return
+        self._recortar_textos()
+
+    def _rejilla(self, columnas: int) -> ctk.CTkFrame:
+        rejilla = ctk.CTkFrame(self.lista, fg_color="transparent")
+        rejilla.pack(fill="x", padx=4, pady=4)
+        for indice in range(max(1, columnas)):
+            rejilla.grid_columnconfigure(indice, weight=1, uniform="columnas")
+        return rejilla
+
+    def _pintar_rejilla_enlaces(self, visibles: list[dict]) -> None:
+        columnas = self._columnas_actuales(len(visibles))
+        self._columnas = columnas
+        rejilla = self._rejilla(columnas)
+        for indice, enlace in enumerate(visibles):
+            self._crear_fila(rejilla, enlace, indice // columnas, indice % columnas)
+
+    def _medir(self, fuente: ctk.CTkFont):
+        escala = float(self._get_window_scaling() or 1)
+        familia, tamano, _estilo = fuente.create_scaled_tuple(escala)
+        peso = fuente.cget("weight")
+        clave = (familia, tamano, peso)
+        medida = self._fuentes_medida.get(clave)
+        if medida is None:
+            medida = FuenteTk(family=familia, size=tamano, weight=peso)
+            self._fuentes_medida[clave] = medida
+        return medida.measure
+
+    def _presupuesto(self, reserva: int) -> int:
+        columnas = max(1, self._columnas)
+        ancho = self._ancho_contenedor()
+        escala = float(self._get_window_scaling() or 1)
+        return max(0, ancho // columnas - int(reserva * escala))
+
+    def _registrar_recorte(
+        self,
+        etiqueta: ctk.CTkLabel,
+        texto: str,
+        fuente: ctk.CTkFont,
+        reserva: int,
+        envolver: bool = False,
+    ) -> None:
+        self._recortes.append(
+            {
+                "etiqueta": etiqueta,
+                "texto": texto,
+                "fuente": fuente,
+                "reserva": reserva,
+                "envolver": envolver,
+            }
+        )
+        self._aplicar_recorte(self._recortes[-1])
+
+    def _actualizar_recorte(self, etiqueta: ctk.CTkLabel, texto: str) -> None:
+        for item in self._recortes:
+            if item["etiqueta"] is etiqueta:
+                item["texto"] = texto
+                self._aplicar_recorte(item)
+                return
+        etiqueta.configure(text=texto)
+
+    def _aplicar_recorte(self, item: dict) -> None:
+        presupuesto = self._presupuesto(item["reserva"])
+        if item["envolver"]:
+            item["etiqueta"].configure(wraplength=max(80, presupuesto))
+            item["etiqueta"].configure(text=item["texto"])
+            return
+        item["etiqueta"].configure(
+            text=recortar_texto(item["texto"], self._medir(item["fuente"]), presupuesto)
+        )
+
+    def _recortar_textos(self) -> None:
+        for item in self._recortes:
+            try:
+                if not item["etiqueta"].winfo_exists():
+                    continue
+            except Exception:
+                continue
+            self._aplicar_recorte(item)
+
+    def _crear_fila(self, padre: ctk.CTkFrame, enlace: dict, fila_grid: int, columna: int) -> None:
         titulo, detalle, color = self._presentacion(enlace)
 
-        fila = ctk.CTkFrame(self.lista, fg_color=COLORES["fila"], corner_radius=12)
-        fila.pack(fill="x", pady=6, padx=4)
+        fila = ctk.CTkFrame(padre, fg_color=COLORES["fila"], corner_radius=12)
+        fila.grid(row=fila_grid, column=columna, sticky="nsew", padx=8, pady=6)
         fila.grid_columnconfigure(1, weight=1)
+        fila.grid_columnconfigure(2, minsize=28)
 
         punto = ctk.CTkFrame(fila, width=12, height=12, corner_radius=6, fg_color=color)
         punto.grid(row=0, column=0, padx=(16, 12), pady=16)
@@ -2211,7 +2424,7 @@ class Aplicacion(ctk.CTk):
 
         etiqueta_titulo = ctk.CTkLabel(
             textos,
-            text=titulo,
+            text="",
             anchor="w",
             justify="left",
             text_color=COLORES["texto"],
@@ -2219,54 +2432,60 @@ class Aplicacion(ctk.CTk):
             fg_color="transparent",
         )
         etiqueta_titulo.pack(fill="x")
-        ctk.CTkLabel(
+        self._registrar_recorte(etiqueta_titulo, titulo, self.fuente_titulo, RESERVA_TEXTO_FILA)
+        url = str(enlace.get("url") or "")
+        etiqueta_url = ctk.CTkLabel(
             textos,
-            text=str(enlace.get("url") or ""),
+            text="",
             anchor="w",
             justify="left",
-            wraplength=480,
             text_color=COLORES["secundario"],
             font=self.fuente_url,
             fg_color="transparent",
-        ).pack(fill="x", pady=(2, 0))
+        )
+        etiqueta_url.pack(fill="x", pady=(2, 0))
+        self._registrar_recorte(etiqueta_url, url, self.fuente_url, RESERVA_TEXTO_FILA)
 
         notas = str(enlace.get("notas") or "").strip()
         if notas:
             primera = notas.splitlines()[0].strip()
-            if len(primera) > 80:
-                primera = primera[:77] + "..."
-            ctk.CTkLabel(
+            etiqueta_notas = ctk.CTkLabel(
                 textos,
-                text=primera,
+                text="",
                 anchor="w",
                 justify="left",
                 text_color=COLORES["secundario"],
                 font=self.fuente_detalle,
                 fg_color="transparent",
-            ).pack(fill="x", pady=(2, 0))
+            )
+            etiqueta_notas.pack(fill="x", pady=(2, 0))
+            self._registrar_recorte(etiqueta_notas, primera, self.fuente_detalle, RESERVA_TEXTO_FILA)
 
         etiqueta_detalle = ctk.CTkLabel(
             textos,
-            text=detalle,
+            text="",
             anchor="w",
             text_color=color,
             font=self.fuente_detalle,
             fg_color="transparent",
         )
         etiqueta_detalle.pack(fill="x", pady=(4, 0))
+        self._registrar_recorte(etiqueta_detalle, detalle, self.fuente_detalle, RESERVA_TEXTO_FILA)
         self._filas[id(enlace)] = {
             "punto": punto,
             "titulo": etiqueta_titulo,
             "detalle": etiqueta_detalle,
         }
 
+        marca = ctk.CTkLabel(
+            fila,
+            text="",
+            width=28,
+            fg_color="transparent",
+        )
         if enlace.get("visitado"):
-            ctk.CTkLabel(
-                fila,
-                text="",
-                image=self.iconos["check"],
-                fg_color="transparent",
-            ).grid(row=0, column=2, padx=(4, 8), pady=16)
+            marca.configure(image=self.iconos["check"])
+        marca.grid(row=0, column=2, padx=(4, 8), pady=16)
 
         acciones = ctk.CTkFrame(fila, fg_color="transparent")
         acciones.grid(row=0, column=3, padx=(4, 12), pady=12)

@@ -596,6 +596,176 @@ def probar_red(informe: _Comprobaciones) -> None:
     )
 
 
+def _columnas_pintadas(app) -> int:
+    hijos = app.lista.winfo_children()
+    if not hijos:
+        return 0
+    columnas = 0
+    for hijo in hijos[0].winfo_children():
+        info = hijo.grid_info()
+        if info:
+            columnas = max(columnas, int(info["column"]) + 1)
+    return columnas
+
+
+def _cancelar_redimension(app) -> None:
+    if app._after_redimension is not None:
+        try:
+            app.after_cancel(app._after_redimension)
+        except Exception:
+            pass
+        app._after_redimension = None
+
+
+def probar_columnas(informe: _Comprobaciones) -> None:
+    import customtkinter as ctk
+
+    import interfaz
+
+    minimo = interfaz.ANCHO_MINIMO_COLUMNA
+    casos = [(ancho, maximo, 1) for ancho in (0, -5, 479, 480, 959) for maximo in (2, 3)]
+    casos.extend(
+        [
+            (960, 2, 2),
+            (960, 3, 2),
+            (1439, 3, 2),
+            (1440, 3, 3),
+            (4000, 2, 2),
+            (4000, 3, 3),
+            (2000, 0, 1),
+        ]
+    )
+    fallos = [
+        f"{ancho}/{maximo}->{interfaz.columnas_para_ancho(ancho, minimo, maximo)}!={esperado}"
+        for ancho, maximo, esperado in casos
+        if interfaz.columnas_para_ancho(ancho, minimo, maximo) != esperado
+    ]
+    if interfaz.columnas_para_ancho(2000, 0, 3) != 1:
+        fallos.append("minimo 0")
+    informe.comprobar(
+        not fallos,
+        "el ancho del contenedor decide las columnas en los límites",
+        "; ".join(fallos),
+    )
+    medir = lambda texto: len(texto) * 10
+    informe.comprobar(
+        interfaz.recortar_texto("hola", medir, 40) == "hola"
+        and interfaz.recortar_texto("abcdef", medir, 50) == "ab..."
+        and interfaz.recortar_texto("abc", medir, 0) == "",
+        "un texto que no cabe se corta con puntos suspensivos",
+    )
+
+    ctk.set_appearance_mode("dark")
+    with tempfile.TemporaryDirectory() as carpeta:
+        ruta = Path(carpeta) / "enlaces.json"
+        coleccion = datos.coleccion_vacia()
+        nombres = ["Alfa", "Beta", "Gamma", "Delta", "Epsilon"]
+        for nombre in nombres:
+            datos.crear_categoria(coleccion, nombre)
+        for indice in range(30):
+            enlace = datos.enlace_nuevo(
+                f"https://example.com/item-{indice}/" + "segmento-" * 8
+            )
+            enlace["titulo"] = f"Título largo número {indice} " + ("palabra " * 14)
+            enlace["notas"] = "una nota larga " * 12
+            enlace["estado"] = "activo" if indice % 2 == 0 else "pendiente"
+            enlace["categoria"] = "" if indice % 6 == 0 else nombres[indice % len(nombres)]
+            coleccion["enlaces"].append(enlace)
+        datos.guardar_enlaces(coleccion, ruta)
+        app = interfaz.Aplicacion(ruta=ruta)
+        try:
+            app.minsize(400, 400)
+            app.geometry("800x700")
+            app.update()
+            _cancelar_redimension(app)
+            app._aplicar_columnas()
+            ancho = app._ancho_contenedor()
+            tarjetas = min(
+                interfaz.columnas_para_ancho(ancho, minimo, interfaz.MAX_COLUMNAS_TARJETAS),
+                6,
+            )
+            pintadas = _columnas_pintadas(app)
+            informe.comprobar(
+                app._mostrando_tarjetas()
+                and app._columnas == tarjetas
+                and pintadas == app._columnas
+                and (ancho >= minimo * 2 or app._columnas == 1),
+                "la cuadrícula de tarjetas sigue el ancho del contenedor",
+                f"ancho={ancho} columnas={app._columnas} pintadas={pintadas}",
+            )
+
+            app._al_cambiar_vista("Todos los enlaces")
+            app.update()
+            _cancelar_redimension(app)
+            app._aplicar_columnas()
+            ancho = app._ancho_contenedor()
+            enlaces = min(
+                interfaz.columnas_para_ancho(ancho, minimo, interfaz.MAX_COLUMNAS_ENLACES),
+                30,
+            )
+            textos_largos = [
+                item
+                for item in app._recortes
+                if not item["envolver"] and len(item["texto"]) > 40
+            ]
+            informe.comprobar(
+                app._columnas == enlaces
+                and _columnas_pintadas(app) == app._columnas
+                and any(item["etiqueta"].cget("text").endswith("...") for item in textos_largos),
+                "la lista de enlaces sigue el ancho del contenedor",
+                f"ancho={ancho} columnas={app._columnas}",
+            )
+
+            app._filtro = "activo"
+            app.menu_filtro.set("Activo")
+            app.refrescar_lista()
+            app.update()
+            app.lista._parent_canvas.yview_moveto(0.45)
+            app.update_idletasks()
+            app.geometry("1800x700")
+            app.update()
+            _cancelar_redimension(app)
+            antes = float(app.lista._parent_canvas.yview()[0])
+            app._aplicar_columnas()
+            app.update_idletasks()
+            despues = float(app.lista._parent_canvas.yview()[0])
+            ancho = app._ancho_contenedor()
+            activos = sum(1 for enlace in app.enlaces if enlace.get("estado") == "activo")
+            esperadas = min(
+                interfaz.columnas_para_ancho(ancho, minimo, interfaz.MAX_COLUMNAS_ENLACES),
+                activos,
+            )
+            informe.comprobar(
+                app._filtro == "activo"
+                and app.menu_filtro.get() == "Activo"
+                and app._columnas == esperadas
+                and _columnas_pintadas(app) == app._columnas
+                and abs(despues - antes) < 0.2,
+                "al cambiar de columnas se conservan el filtro y el scroll",
+                f"ancho={ancho} columnas={app._columnas} scroll {antes:.2f}->{despues:.2f}",
+            )
+
+            app._volver_tarjetas()
+            app.update()
+            _cancelar_redimension(app)
+            app._aplicar_columnas()
+            ancho = app._ancho_contenedor()
+            tarjetas = min(
+                interfaz.columnas_para_ancho(ancho, minimo, interfaz.MAX_COLUMNAS_TARJETAS),
+                6,
+            )
+            informe.comprobar(
+                app._mostrando_tarjetas()
+                and app._columnas == tarjetas
+                and _columnas_pintadas(app) == app._columnas
+                and app._columnas <= interfaz.MAX_COLUMNAS_TARJETAS,
+                "las tarjetas no pasan de tres columnas",
+                f"ancho={ancho} columnas={app._columnas}",
+            )
+        finally:
+            app._al_cerrar()
+
+
 def main() -> int:
     _configurar_salida()
     informe = _Comprobaciones()
@@ -607,6 +777,8 @@ def main() -> int:
     probar_categorias(informe)
     print("Alta")
     probar_alta(informe)
+    print("Columnas")
+    probar_columnas(informe)
     print("CSV")
     probar_csv(informe)
     print("Normalización")
