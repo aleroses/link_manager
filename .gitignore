@@ -1,5 +1,9 @@
 venv/
 __pycache__/
 enlaces.json
+data/
 *.bak
 *.tmp
+build/
+dist/
+*.spec
