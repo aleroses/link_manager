@@ -491,3 +491,36 @@ Ninguno de ejecución. `python main.py --probar` terminó con 61 pruebas correct
 
 - Crear la rama `debian` al validar en Linux.
 - Generar el ejecutable en Debian con el comando del README. En la fase 8 solo se probó el de Windows.
+
+## 2026-10-18 — Fase 8.2: Verificar todos y animación de categoría
+
+### Qué se hizo
+
+En las tarjetas, Verificar todos queda a la izquierda de Nueva categoría. En Todos los enlaces sigue en la fila de la barra, el contador y Cancelar, porque esa vista no tiene Nueva categoría. Dentro de una categoría ese botón no aparece. Verificar categoría no abre la barra: el botón pasa a Verificando..., el icono gira y queda deshabilitado hasta que termina. El de la tarjeta gira igual. Una categoría vacía avisa y no arranca.
+
+### Decisiones técnicas y por qué
+
+- Un `CTkButton` no cambia de padre. Hay dos botones con el mismo comando. `_aplicar_vista` muestra el de las tarjetas o el de la lista, nunca los dos, y ninguno dentro de una sección. Si una verificación global ya iba en marcha, la barra sigue visible para poder cancelarla.
+- La tanda de una categoría usa los mismos 8 hilos y el mismo guardado, con `con_barra` en falso. Mientras corre, Verificar todos y Reintentar caídos se desactivan. Si la global está en marcha, los botones de categoría quedan en carga para no encolar otra tanda.
+- Salir de la sección no cancela el trabajo. La cabecera deja de girar. Si las tarjetas están a la vista, sigue el icono de esa categoría. Los resultados se guardan igual.
+- `loader-circle` se añade en SVG y en PNG de 20 y 40 px, y entra en `ICONOS`. Si falta, el arranque muestra el aviso en español y lo anota en `gestor.log`. Al abrir la ventana, Pillow gira el PNG de 40 px en 12 fotogramas. Cada uno es un `CTkImage` de 20 px, para HiDPI. Un `after` de 80 ms los avanza. Se cancela al terminar, al cerrar la ventana y cuando no queda un botón visible en carga. En Windows y en Debian vale el mismo `after` y la misma rotación: no hay GIF ni librerías nuevas.
+- El `--add-data` del README copia `assets/icons/` entera, así que el icono nuevo entra en el paquete sin cambiar el comando.
+
+### Archivos creados o modificados
+
+- `assets/icons/loader-circle.svg`
+- `assets/icons/loader-circle-20.png`
+- `assets/icons/loader-circle-40.png`
+- `interfaz.py`
+- `main.py`
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+Ninguno de ejecución. `python main.py --probar` terminó con 63 pruebas correctas y 0 fallos: el botón de Verificar todos está en las tarjetas y en la lista, y no dentro de una categoría; una categoría vacía no sube el lote; la animación arranca, al salir la cabecera vuelve a su texto y el `after` queda cancelado al cerrar la tanda. El ejecutable de Windows se regeneró y arrancó con `loader-circle-40.png` dentro del paquete.
+
+### Pendientes
+
+- Crear la rama `debian` al validar en Linux.
+- Generar el ejecutable en Debian con el comando del README. En esta fase se regeneró el de Windows.

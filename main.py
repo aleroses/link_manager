@@ -836,10 +836,24 @@ def probar_columnas(informe: _Comprobaciones) -> None:
             app._filtro = "todos"
             app.menu_filtro.set("Todos")
             app.busqueda.delete(0, "end")
+            app.update()
+            en_tarjetas = (
+                app.boton_verificar_tarjetas.winfo_ismapped()
+                and not app.boton_verificar.winfo_ismapped()
+            )
             app._entrar_seccion("Alfa")
             app.update()
+            en_seccion = (
+                not app.boton_verificar_tarjetas.winfo_ismapped()
+                and not app.boton_verificar.winfo_ismapped()
+                and app.boton_verificar_categoria.winfo_ismapped()
+            )
             app._al_cambiar_vista("Todos los enlaces")
             app.update()
+            en_lista = (
+                app.boton_verificar.winfo_ismapped()
+                and not app.boton_verificar_tarjetas.winfo_ismapped()
+            )
             app._volver_tarjetas()
             app.update()
             app._entrar_seccion("Alfa")
@@ -853,10 +867,56 @@ def probar_columnas(informe: _Comprobaciones) -> None:
                 app._lote == lote
                 and not app._verificacion_masiva
                 and app.boton_verificar_categoria.winfo_ismapped()
-                and "sin verificar" in fechas,
+                and "sin verificar" in fechas
+                and en_tarjetas
+                and en_seccion
+                and en_lista,
                 "entrar y salir de una categoría no inicia una verificación",
-                f"lote={app._lote} masiva={app._verificacion_masiva}",
+                f"lote={app._lote} masiva={app._verificacion_masiva} "
+                f"tarjetas={en_tarjetas} seccion={en_seccion} lista={en_lista}",
             )
+
+            datos.crear_categoria(app.coleccion, "Vacia")
+            app._guardar()
+            app._entrar_seccion("Vacia")
+            app.update()
+            app.verificar_categoria("Vacia")
+            informe.comprobar(
+                app._lote == lote
+                and app.boton_verificar_categoria.cget("text") == "Verificar categoría"
+                and app.aviso.cget("text") == "No hay enlaces en esta categoría.",
+                "una categoría vacía no inicia una verificación",
+            )
+
+            original_envio = app._enviar_verificacion
+
+            def _sin_red(*_args, **_kwargs) -> None:
+                return None
+
+            app._enviar_verificacion = _sin_red
+            app._entrar_seccion("Alfa")
+            app.update()
+            app.verificar_categoria("Alfa")
+            app.update()
+            gira = (
+                app._after_carga is not None
+                and app.boton_verificar_categoria.cget("text") == "Verificando..."
+                and not app.barra_progreso.winfo_ismapped()
+            )
+            app._volver_tarjetas()
+            app.update()
+            texto_cabecera = app.boton_verificar_categoria.cget("text")
+            app._finalizar_lote()
+            app.update()
+            app._enviar_verificacion = original_envio
+            informe.comprobar(
+                gira
+                and texto_cabecera == "Verificar categoría"
+                and app._after_carga is None
+                and not app._verificacion_masiva,
+                "la animación arranca, se detiene al salir y no muestra la barra",
+            )
+
             app._volver_tarjetas()
             app.update()
             oculto = not app.boton_verificar_categoria.winfo_ismapped()
@@ -864,9 +924,10 @@ def probar_columnas(informe: _Comprobaciones) -> None:
             app.update()
             pedidos: list[list] = []
 
-            def _anotar(seleccion, _aviso) -> None:
+            def _anotar(seleccion, _aviso, con_barra=True, categoria=None) -> None:
                 pedidos.append(list(seleccion))
 
+            lote_boton = app._lote
             app._iniciar_verificacion = _anotar
             app.boton_verificar_categoria.invoke()
             esperados = app._enlaces_de("Alfa")
@@ -875,7 +936,7 @@ def probar_columnas(informe: _Comprobaciones) -> None:
                 and app.boton_verificar_categoria.winfo_ismapped()
                 and len(pedidos) == 1
                 and pedidos[0] == esperados
-                and app._lote == lote,
+                and app._lote == lote_boton,
                 "el botón de la cabecera verifica solo la categoría abierta",
             )
         finally:

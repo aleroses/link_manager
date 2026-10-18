@@ -38,6 +38,9 @@ ANCHO_MINIMO_COLUMNA = 480
 MAX_COLUMNAS_ENLACES = 2
 MAX_COLUMNAS_TARJETAS = 3
 DEBOUNCE_REDIMENSION_MS = 150
+# Vueltas del icono de carga. 12 fotogramas cada 80 ms.
+FOTOGRAMAS_CARGA = 12
+INTERVALO_CARGA_MS = 80
 # Punto, hueco de visitado, cuatro botones y márgenes de la fila.
 RESERVA_TEXTO_FILA = 292
 # Icono de carpeta y márgenes del nombre en la tarjeta.
@@ -62,6 +65,7 @@ ICONOS = {
     "copiar": "copy",
     "eliminar": "trash-2",
     "verificar": "refresh-cw",
+    "carga": "loader-circle",
     "buscar": "search",
     "filtrar": "filter",
     "editar": "pencil",
@@ -292,6 +296,20 @@ def cargar_iconos(carpeta: Path | None = None) -> dict[str, ctk.CTkImage]:
     return imagenes
 
 
+def fotogramas_carga(ruta: Path) -> list[ctk.CTkImage]:
+    """Doce giros del icono de 40 px, mostrados a 20 px."""
+    imagen = Image.open(ruta).convert("RGBA")
+    fotogramas: list[ctk.CTkImage] = []
+    for paso in range(FOTOGRAMAS_CARGA):
+        giro = imagen.rotate(
+            paso * (360 / FOTOGRAMAS_CARGA),
+            resample=Image.Resampling.BICUBIC,
+            expand=False,
+        )
+        fotogramas.append(ctk.CTkImage(light_image=giro, dark_image=giro, size=(20, 20)))
+    return fotogramas
+
+
 def _mensaje_permiso(exc: OSError, alternativo: str) -> str:
     """Mensaje de guardado. Distingue una carpeta sin permisos."""
     if isinstance(exc, PermissionError) or exc.errno in {1, 13}:
@@ -343,6 +361,12 @@ class Aplicacion(ctk.CTk):
         self._token_por_enlace: dict[int, int] = {}
         self._cancelar_lote: threading.Event | None = None
         self._verificacion_masiva = False
+        self._con_barra = False
+        self._nombre_lote: str | None = None
+        self._botones_tarjeta: dict[str, ctk.CTkButton] = {}
+        self._fotogramas_carga = fotogramas_carga(CARPETA_ICONOS / "loader-circle-40.png")
+        self._indice_carga = 0
+        self._after_carga: str | None = None
         self._total_lote = 0
         self._hechos_lote = 0
         self._pendientes_lote = 0
@@ -566,6 +590,20 @@ class Aplicacion(ctk.CTk):
             text_color=COLORES["texto_boton"],
             font=ctk.CTkFont(size=13, weight="bold"),
             command=self.nueva_categoria,
+        )
+        self.boton_verificar_tarjetas = ctk.CTkButton(
+            self.fila_vista,
+            text="Verificar todos",
+            image=self.iconos["verificar"],
+            compound="left",
+            width=190,
+            height=36,
+            corner_radius=10,
+            fg_color=COLORES["acento"],
+            hover_color=COLORES["acento_hover"],
+            text_color=COLORES["texto_boton"],
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self.verificar_todos,
         )
         self.boton_verificar_categoria = ctk.CTkButton(
             self.fila_vista,
@@ -1121,9 +1159,13 @@ class Aplicacion(ctk.CTk):
             self.titulo_seccion.pack_forget()
             self.boton_verificar_categoria.pack_forget()
             self.boton_nueva.pack(side="right")
+            self.boton_verificar_tarjetas.pack(side="right", padx=(0, 8))
+            self._ocultar_boton_progreso()
+            self._sincronizar_carga()
             return
         self.fila_buscar.pack(fill="x", padx=20, pady=(4, 0), before=self.aviso)
         self.boton_nueva.pack_forget()
+        self.boton_verificar_tarjetas.pack_forget()
         if en_seccion:
             self.boton_volver.pack(side="left", padx=(12, 8))
             self.titulo_seccion.configure(text=self._seccion or "Sin categoría")
@@ -1131,14 +1173,37 @@ class Aplicacion(ctk.CTk):
             self.boton_verificar_categoria.pack(side="right")
             self._etiqueta_filtro_categoria.pack_forget()
             self.menu_categoria.pack_forget()
+            self._ocultar_boton_progreso()
+            self._sincronizar_carga()
             return
         self.boton_volver.pack_forget()
         self.titulo_seccion.pack_forget()
         self.boton_verificar_categoria.pack_forget()
         self._etiqueta_filtro_categoria.pack(side="left", padx=(12, 8))
         self.menu_categoria.pack(side="left")
+        self._mostrar_boton_progreso()
+        self._sincronizar_carga()
+
+    def _mostrar_fila_progreso(self) -> None:
+        if self.fila_verificar.winfo_manager():
+            return
+        self.fila_verificar.pack(fill="x", padx=20, pady=(0, 4), before=self.fila_vista)
+
+    def _mostrar_boton_progreso(self) -> None:
+        """En Todos los enlaces el botón vive junto a la barra."""
+        self._mostrar_fila_progreso()
+        self.boton_verificar.grid(row=0, column=0, sticky="w")
+
+    def _ocultar_boton_progreso(self) -> None:
+        """Fuera de Todos los enlaces no se ve Verificar todos."""
+        self.boton_verificar.grid_remove()
+        if self._verificacion_masiva and self._con_barra:
+            self._mostrar_fila_progreso()
+            return
+        self.fila_verificar.pack_forget()
 
     def _pintar_tarjetas(self) -> None:
+        self._botones_tarjeta = {}
         fichas: list[tuple[str, bool]] = [("", False)]
         for nombre in self._nombres_categoria():
             fichas.append((nombre, True))
@@ -1147,6 +1212,7 @@ class Aplicacion(ctk.CTk):
         rejilla = self._rejilla(columnas)
         for indice, (nombre, editable) in enumerate(fichas):
             self._crear_tarjeta(rejilla, nombre, editable, indice, columnas)
+        self._sincronizar_carga()
 
     def _crear_tarjeta(
         self,
@@ -1220,9 +1286,13 @@ class Aplicacion(ctk.CTk):
         self._boton_fila(acciones, "abrir", lambda n=nombre: self.abrir_todos(n)).pack(
             side="left", padx=3
         )
-        self._boton_fila(acciones, "verificar", lambda n=nombre: self.verificar_categoria(n)).pack(
-            side="left", padx=3
+        boton_verificar = self._boton_fila(
+            acciones,
+            "verificar",
+            lambda n=nombre: self.verificar_categoria(n),
         )
+        boton_verificar.pack(side="left", padx=3)
+        self._botones_tarjeta[nombre] = boton_verificar
         if editable:
             self._boton_fila(acciones, "editar", lambda n=nombre: self.renombrar_categoria(n)).pack(
                 side="left", padx=3
@@ -1242,9 +1312,15 @@ class Aplicacion(ctk.CTk):
             self._ligar_tarjeta(hijo, nombre)
 
     def verificar_categoria(self, nombre: str) -> None:
+        enlaces = self._enlaces_de(nombre)
+        if not enlaces:
+            self.aviso.configure(text="No hay enlaces en esta categoría.")
+            return
         self._iniciar_verificacion(
-            self._enlaces_de(nombre),
-            "Esta categoría no tiene enlaces.",
+            enlaces,
+            "No hay enlaces en esta categoría.",
+            con_barra=False,
+            categoria=nombre,
         )
 
     def abrir_todos(self, nombre: str) -> None:
@@ -1955,7 +2031,7 @@ class Aplicacion(ctk.CTk):
     def verificar_todos(self) -> None:
         """Comprueba la lista completa, también lo que el filtro oculta."""
         seleccion = [enlace for enlace in self.enlaces if isinstance(enlace, dict)]
-        self._iniciar_verificacion(seleccion, "Todavía no hay enlaces para verificar.")
+        self._iniciar_verificacion(seleccion, "Todavía no hay enlaces para verificar.", con_barra=True)
 
     def reintentar_caidos(self) -> None:
         """Vuelve a comprobar los caídos, también los que el filtro oculta."""
@@ -1964,10 +2040,20 @@ class Aplicacion(ctk.CTk):
             for enlace in self.enlaces
             if isinstance(enlace, dict) and str(enlace.get("estado") or "") == "caído"
         ]
-        self._iniciar_verificacion(seleccion, "No hay enlaces caídos.")
+        self._iniciar_verificacion(seleccion, "No hay enlaces caídos.", con_barra=True)
 
-    def _iniciar_verificacion(self, seleccion: list, aviso_vacio: str) -> None:
-        """Encola una tanda. Como máximo hay 8 hilos, compartidos con Añadir."""
+    def _iniciar_verificacion(
+        self,
+        seleccion: list,
+        aviso_vacio: str,
+        con_barra: bool = True,
+        categoria: str | None = None,
+    ) -> None:
+        """Encola una tanda. Como máximo hay 8 hilos, compartidos con Añadir.
+
+        con_barra es la verificación de toda la lista. Una categoría gira
+        el botón y no muestra la barra.
+        """
         if self._verificacion_masiva or self._cerrando:
             return
         if not seleccion:
@@ -1980,11 +2066,16 @@ class Aplicacion(ctk.CTk):
         cancelar = threading.Event()
         self._cancelar_lote = cancelar
         self._verificacion_masiva = True
+        self._con_barra = con_barra
+        self._nombre_lote = categoria
         self._fallo_al_guardar = False
         self._hechos_lote = 0
         self._total_lote = len(seleccion)
         self._pendientes_lote = len(seleccion)
-        self._mostrar_progreso()
+        self._desactivar_globales()
+        if con_barra:
+            self._mostrar_progreso()
+        self._sincronizar_carga()
         self.aviso.configure(text="")
         enviados = 0
         try:
@@ -2012,13 +2103,27 @@ class Aplicacion(ctk.CTk):
         self.boton_cancelar.configure(state="disabled")
         self.aviso.configure(text="Cancelando la verificación.")
 
+    def _desactivar_globales(self) -> None:
+        for boton in (
+            self.boton_verificar,
+            self.boton_verificar_tarjetas,
+            self.boton_reintentar,
+        ):
+            boton.configure(state="disabled", fg_color=COLORES["borde"])
+
+    def _reactivar_globales(self) -> None:
+        for boton in (
+            self.boton_verificar,
+            self.boton_verificar_tarjetas,
+            self.boton_reintentar,
+        ):
+            boton.configure(state="normal", fg_color=COLORES["acento"])
+
     def _mostrar_progreso(self) -> None:
+        self._mostrar_fila_progreso()
         self.barra_progreso.set(0)
         self.texto_progreso.configure(text=texto_progreso(0, self._total_lote))
         self.boton_cancelar.configure(state="normal")
-        self.boton_verificar.configure(state="disabled", fg_color=COLORES["borde"])
-        self.boton_verificar_categoria.configure(state="disabled", fg_color=COLORES["borde"])
-        self.boton_reintentar.configure(state="disabled", fg_color=COLORES["borde"])
         self.barra_progreso.grid(row=0, column=1, sticky="ew", padx=(14, 12))
         self.texto_progreso.grid(row=0, column=2, padx=(0, 12))
         self.boton_cancelar.grid(row=0, column=3)
@@ -2027,9 +2132,10 @@ class Aplicacion(ctk.CTk):
         self.barra_progreso.grid_remove()
         self.texto_progreso.grid_remove()
         self.boton_cancelar.grid_remove()
-        self.boton_verificar.configure(state="normal", fg_color=COLORES["acento"])
-        self.boton_verificar_categoria.configure(state="normal", fg_color=COLORES["acento"])
-        self.boton_reintentar.configure(state="normal", fg_color=COLORES["acento"])
+        self._reactivar_globales()
+        if self._mostrando_tarjetas() or self._seccion is not None:
+            self._ocultar_boton_progreso()
+        self._sincronizar_carga()
 
     def _pintar_progreso(self) -> None:
         total = self._total_lote
@@ -2043,7 +2149,8 @@ class Aplicacion(ctk.CTk):
         self._pendientes_lote -= 1
         if contado:
             self._hechos_lote += 1
-        self._pintar_progreso()
+        if self._con_barra:
+            self._pintar_progreso()
         if self._pendientes_lote <= 0:
             self._finalizar_lote()
 
@@ -2059,6 +2166,7 @@ class Aplicacion(ctk.CTk):
                 return
         except Exception:
             return
+        self._sincronizar_carga()
         self.boton_cancelar.configure(state="disabled")
         if fallo:
             self.aviso.configure(text="No se pudo guardar el resultado de la verificación.")
@@ -2072,6 +2180,9 @@ class Aplicacion(ctk.CTk):
             )
         else:
             self.aviso.configure(text=f"Verificación terminada. {hechos} de {total}.")
+        if not self._con_barra:
+            self._reactivar_globales()
+            return
         self._after_ocultar = self.after(
             PAUSA_CIERRE_PROGRESO_MS,
             lambda lote=lote: self._ocultar_progreso_lote(lote),
@@ -2088,12 +2199,106 @@ class Aplicacion(ctk.CTk):
             return
         self._ocultar_progreso()
 
+    def _botones_en_carga(self) -> list[tuple[ctk.CTkButton, bool]]:
+        """Botones que deben girar. El segundo valor distingue la cabecera."""
+        if not self._verificacion_masiva:
+            return []
+        botones: list[tuple[ctk.CTkButton, bool]] = []
+        if self._con_barra:
+            if self._seccion is not None:
+                botones.append((self.boton_verificar_categoria, True))
+            botones.extend((boton, False) for boton in self._botones_tarjeta.values())
+            return botones
+        if self._seccion == self._nombre_lote:
+            botones.append((self.boton_verificar_categoria, True))
+        tarjeta = self._botones_tarjeta.get(self._nombre_lote or "")
+        if self._nombre_lote is not None and tarjeta is not None:
+            botones.append((tarjeta, False))
+        return botones
+
+    def _aplicar_fotograma(self, boton: ctk.CTkButton, cabecera: bool) -> None:
+        if not self._fotogramas_carga:
+            return
+        try:
+            if not boton.winfo_exists():
+                return
+        except Exception:
+            return
+        imagen = self._fotogramas_carga[self._indice_carga % len(self._fotogramas_carga)]
+        if cabecera:
+            boton.configure(
+                text="Verificando...",
+                image=imagen,
+                state="disabled",
+                fg_color=COLORES["acento"],
+            )
+            return
+        boton.configure(image=imagen, state="disabled")
+
+    def _restaurar_boton_categoria(self, boton: ctk.CTkButton, cabecera: bool, ocupado: bool) -> None:
+        try:
+            if not boton.winfo_exists():
+                return
+        except Exception:
+            return
+        if cabecera:
+            boton.configure(
+                text="Verificar categoría",
+                image=self.iconos["verificar"],
+                state="disabled" if ocupado else "normal",
+                fg_color=COLORES["borde"] if ocupado else COLORES["acento"],
+            )
+            return
+        boton.configure(
+            image=self.iconos["verificar"],
+            state="disabled" if ocupado else "normal",
+        )
+
+    def _sincronizar_carga(self) -> None:
+        """Gira solo los botones de la tanda en curso y cancela el after si no hay."""
+        activos = self._botones_en_carga()
+        vistos = {id(boton) for boton, _cabecera in activos}
+        ocupado = self._verificacion_masiva
+        if id(self.boton_verificar_categoria) not in vistos:
+            self._restaurar_boton_categoria(self.boton_verificar_categoria, True, ocupado)
+        for boton in self._botones_tarjeta.values():
+            if id(boton) not in vistos:
+                self._restaurar_boton_categoria(boton, False, ocupado)
+        for boton, cabecera in activos:
+            self._aplicar_fotograma(boton, cabecera)
+        if not activos or self._cerrando:
+            self._cancelar_after_carga()
+            return
+        if self._after_carga is None:
+            self._after_carga = self.after(INTERVALO_CARGA_MS, self._avanzar_carga)
+
+    def _avanzar_carga(self) -> None:
+        self._after_carga = None
+        if self._cerrando or not self._fotogramas_carga:
+            return
+        self._indice_carga = (self._indice_carga + 1) % len(self._fotogramas_carga)
+        self._sincronizar_carga()
+
+    def _cancelar_after_carga(self) -> None:
+        if self._after_carga is None:
+            return
+        try:
+            self.after_cancel(self._after_carga)
+        except Exception:
+            pass
+        self._after_carga = None
+
     def _al_cerrar(self) -> None:
         """Cierra la ventana sin esperar a la red. Lo ya encolado no arranca."""
         self._cerrando = True
         if self._cancelar_lote is not None:
             self._cancelar_lote.set()
-        for identificador in (self._after_resultados, self._after_ocultar, self._after_redimension):
+        for identificador in (
+            self._after_resultados,
+            self._after_ocultar,
+            self._after_redimension,
+            self._after_carga,
+        ):
             if identificador is None:
                 continue
             try:
@@ -2223,6 +2428,7 @@ class Aplicacion(ctk.CTk):
 
         self._filas = {}
         self._recortes = []
+        self._botones_tarjeta = {}
         for hijo in self.lista.winfo_children():
             hijo.destroy()
         self._rehacer_menu_alta()
@@ -2269,6 +2475,7 @@ class Aplicacion(ctk.CTk):
             pass
         if conservar_foco:
             self.busqueda.focus_set()
+        self._sincronizar_carga()
 
     def abrir(self, enlace: dict) -> None:
         """Abre la URL en el navegador y, si arranca, marca el enlace como visitado."""
