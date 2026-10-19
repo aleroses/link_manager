@@ -585,3 +585,41 @@ El ejecutable quedó con fecha 18 de octubre de 2026, 02:30. PyInstaller 6.22.3,
 
 - Crear la rama `debian` al validar en Linux.
 - Generar el ejecutable en Debian con el comando del README. En esta fase se regeneró el de Windows.
+
+## 2026-10-18 — Fase 9: Debian
+
+### Qué se hizo
+
+Se validó el programa en Debian 12 (bookworm), Python 3.11.2, en la rama `debian`. `python main.py --probar` termina con 63 pruebas correctas y 0 fallos. El primer arranque crea `data/enlaces.json` y `data/gestor.log`. El ejecutable de Debian se generó con el comando del README.
+
+El arranque de cada día queda en el README, aparte de la instalación. En Debian hay tres formas: activar el entorno y `python main.py`, llamar a `./venv/bin/python main.py`, o `./gestor.sh`. En Windows, `Activate.ps1` y `python main.py`, o `.\venv\Scripts\python.exe main.py`. `gestor.sh` calcula su carpeta, avisa en español si falta el entorno y lanza `main.py` con los argumentos que reciba. El README también describe, como paso opcional, un archivo `.desktop` en `~/.local/share/applications/` con rutas absolutas de ejemplo.
+
+### Decisiones técnicas y por qué
+
+- `python3-tk` no está dentro de `pip`. En esta máquina faltaba. Tras instalarlo, el entorno virtual que ya existía importa `tkinter` 8.6 sin volver a crearse: el módulo vive en la biblioteca estándar del Python del sistema. El paquete `python3-venv` (el metapaquete) no está instalado; sí lo está `python3.11-venv`, y con eso `python3 -m venv` funciona. El comando `apt` del README sigue siendo el que debe usar alguien que parte de cero.
+- El código ya separa Windows y Linux donde hace falta. Las rutas usan `pathlib`. La carpeta de configuración es `%APPDATA%` en Windows y `$XDG_CONFIG_HOME` o `~/.config` en el resto. El CSV se escribe en UTF-8 con BOM y, al leer, acepta también cp1252. El portapapeles usa `clipboard_clear`, `clipboard_append` y `update_idletasks()`. Los diálogos son `tkinter.filedialog`. Abrir un enlace usa `webbrowser`; aquí el controlador es Firefox y `xdg-open` está en `/usr/bin/xdg-open`. El escalado lee `_get_window_scaling()` y los iconos de 40 px se muestran a 20. El giro de carga es Pillow más `after(80)`. La prueba de la animación pasó.
+- CustomTkinter, al importarse en Linux, copia Roboto y la fuente de formas a `~/.fonts/`. No hubo `FontManager error` y el dibujo se quedó en `font_shapes`. No se parchea la librería.
+- En Linux el canvas de CustomTkinter avanza de 30 en 30 px. `refrescar_lista` aplicaba la fracción de scroll antes de que Tk recalculara el alto. Al pasar de una columna a dos, la vista saltaba (0,45 a 0,72). Ahora se actualiza la región con el alto nuevo y después se mueve el scroll. El filtro y la fracción se conservan. El mismo arreglo vale en Windows: allí el incremento es de 1 px y la prueba ya cabía en el margen, pero la fracción se aplica igual al alto nuevo.
+- `source` y `Activate.ps1` solo duran en la terminal donde se ejecutan. El script y la llamada directa al Python del entorno no dependen de esa activación. `gestor.sh` usa `BASH_SOURCE` para encontrar el proyecto aunque la terminal esté en otra carpeta, y `exec` sustituye al shell para que el código de salida sea el de `main.py`. El permiso de ejecución queda en el índice de Git (`100755`).
+
+### Archivos creados o modificados
+
+- `interfaz.py`
+- `gestor.sh`
+- `README.md`
+- `DOCUMENTACION.md`
+
+`build/` y `dist/` no se versionan. `GestorDeEnlaces.spec` no cambió: sigue con rutas relativas.
+
+### Problemas encontrados y cómo se resolvieron
+
+Sin `python3-tk`, las pruebas se detenían en Columnas con `ModuleNotFoundError: No module named 'tkinter'` y la ventana no arrancaba. Con el paquete instalado, el resto de la suite pasó salvo el scroll al cambiar de columnas. Ese caso quedó corregido en `interfaz.py`.
+
+`python main.py --probar` terminó con 63 pruebas correctas y 0 fallos, incluidas las tres de red. `./gestor.sh --probar` repite ese resultado. `./gestor.sh` abre la misma ventana. Si el script se copia a una carpeta sin `venv`, termina con un mensaje en español y el código 1. Al abrir `python main.py` se crearon `data/enlaces.json` (documento vacío version 2) y `data/gestor.log` (vacío, sin traceback). `.gitignore` sigue cubriendo `data/`, `venv/`, `build/`, `dist/` y `*.log`.
+
+El ejecutable se generó con PyInstaller 6.22.3, el separador `:` y `--windowed`. `dist/GestorDeEnlaces/` ocupa 56 MB (635 archivos, 56198544 bytes) sin `data/`. `GestorDeEnlaces` arrancó, creó `data/enlaces.json` y `data/gestor.log` junto al programa, y el registro no tuvo traceback. Esa carpeta de prueba se borró después; vuelve a crearse al abrir el programa. Los iconos quedaron en `_internal/assets/icons/`, incluido `loader-circle-40.png`.
+
+### Pendientes
+
+- Llevar a la rama `windows` el arreglo de `interfaz.py` y las notas de `README.md` y `DOCUMENTACION.md` de esta fase.
+- No fusionar con `master` hasta que se pida.
