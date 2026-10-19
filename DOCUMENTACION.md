@@ -623,3 +623,27 @@ El ejecutable se generó con PyInstaller 6.22.3, el separador `:` y `--windowed`
 
 - Llevar a la rama `windows` el arreglo de `interfaz.py` y las notas de `README.md` y `DOCUMENTACION.md` de esta fase.
 - No fusionar con `master` hasta que se pida.
+
+## 2026-10-19 — Fase 12: Sección Ramas
+
+### Qué se hizo
+
+La sección "Ramas" del README deja a `master` como línea estable, en `v1.0.0`. `windows` y `debian` quedan como ramas de validación por sistema operativo. El trabajo futuro se hace en la rama del sistema donde se prueba, se fusiona en `master` y la otra rama se pone al día con `git merge master`.
+
+### Decisiones técnicas y por qué
+
+- `v1.0.0` ya está en `master`. La guía deja de decir que esa rama espera sin cambios y deja de indicar `git merge windows` como único camino de vuelta.
+- Cada sistema valida en su rama. Los comandos del README cubren los dos sentidos: Debian hacia `master` y luego `windows`, o Windows hacia `master` y luego `debian`.
+
+### Archivos creados o modificados
+
+- `README.md`
+- `DOCUMENTACION.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+Ninguno de ejecución. El cambio es solo de guía.
+
+### Pendientes
+
+- `windows` sigue en el commit de la Fase 8.4 hasta que, en esa rama, se ejecute `git merge master`.

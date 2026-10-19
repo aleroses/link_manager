@@ -226,15 +226,28 @@ Hasta esta fase:
 
 ## Ramas
 
-- `master`: rama estable. Solo recibe cambios cuando se confirma una fusión.
-- `windows`: rama de desarrollo y de prueba en Windows.
-- `debian`: el mismo programa, validado en Debian. Los comandos de Linux de esta guía se probaron en esta rama.
+- `master`: línea estable. Está en `v1.0.0`. Todo cambio entra aquí cuando ya está validado.
+- `windows` y `debian`: ramas de validación, una por sistema operativo. Contienen `v1.0.0`. Cuando `master` avanza, se actualizan con `git merge master`.
 
-`master` aparece en el primer commit y no se vuelve a tocar hasta que se pida la fusión. Desde `windows`:
+El trabajo nuevo se hace en la rama del sistema donde se está probando. Ahí se valida, se fusiona en `master` y después se actualiza la otra rama.
+
+En Debian:
+
+```bash
+git checkout master
+git merge debian
+git checkout windows
+git merge master
+git checkout debian
+```
+
+En Windows:
 
 ```bash
 git checkout master
 git merge windows
+git checkout debian
+git merge master
 git checkout windows
 ```
 
