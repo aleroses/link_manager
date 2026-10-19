@@ -1,3 +1,4 @@
+# Gestor de Enlaces. Licencia GPL-3.0. El texto está en LICENSE.
 """Ventana del Gestor de Enlaces.
 
 Tema oscuro, campo para añadir una URL y lista con el estado de cada
@@ -2435,10 +2436,7 @@ class Aplicacion(ctk.CTk):
         if self._mostrando_tarjetas():
             self._pintar_tarjetas()
             self._pintar_resumen()
-            try:
-                self.lista._parent_canvas.yview_moveto(fraccion)
-            except Exception:
-                pass
+            self._restaurar_scroll(fraccion)
             return
         self._asegurar_filtro_categoria()
         consulta = self._categoria_consulta()
@@ -2469,13 +2467,27 @@ class Aplicacion(ctk.CTk):
             self._pintar_rejilla_enlaces(visibles)
         self._pintar_resumen()
         self._rehacer_menu_categoria()
-        try:
-            self.lista._parent_canvas.yview_moveto(fraccion)
-        except Exception:
-            pass
+        self._restaurar_scroll(fraccion)
         if conservar_foco:
             self.busqueda.focus_set()
         self._sincronizar_carga()
+
+    def _restaurar_scroll(self, fraccion: float) -> None:
+        """Deja el scroll en la fracción guardada, ya con el alto nuevo.
+
+        En Linux el canvas avanza de 30 en 30 px. Si la fracción se aplica
+        antes de recalcular la región, Tk conserva el desplazamiento del
+        alto anterior y la vista salta.
+        """
+        try:
+            canvas = self.lista._parent_canvas
+            self.update_idletasks()
+            caja = canvas.bbox("all")
+            if caja is not None:
+                canvas.configure(scrollregion=caja)
+            canvas.yview_moveto(fraccion)
+        except Exception:
+            return
 
     def abrir(self, enlace: dict) -> None:
         """Abre la URL en el navegador y, si arranca, marca el enlace como visitado."""

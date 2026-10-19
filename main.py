@@ -1,3 +1,4 @@
+# Gestor de Enlaces. Licencia GPL-3.0. El texto está en LICENSE.
 """Punto de entrada del Gestor de Enlaces.
 
 Sin argumentos abre la ventana. Con --probar ejecuta las pruebas de

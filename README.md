@@ -52,32 +52,77 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## Ejecutar la aplicación
+## Uso diario
 
-Con el entorno virtual activado, en la carpeta del proyecto:
+Crear el entorno e instalar las dependencias se hace una sola vez, con los pasos de arriba. Cada día basta uno de estos comandos.
 
-```powershell
+### Debian
+
+`source venv/bin/activate` solo afecta a la terminal en la que se ejecuta. Al cerrarla, `python` vuelve a ser el del sistema.
+
+De la más simple a la más avanzada:
+
+```bash
+# (a) Con el entorno activado, en la carpeta del proyecto
+source venv/bin/activate
 python main.py
+
+# (b) Sin activar el entorno, en la carpeta del proyecto
+./venv/bin/python main.py
+
+# (c) Desde cualquier carpeta. El script localiza el proyecto solo.
+./gestor.sh
 ```
 
-En Debian el comando es el mismo (`python main.py`) después de `source venv/bin/activate`.
+`./gestor.sh` también acepta los argumentos de `main.py`. Desde otra carpeta hay que llamarlo con su ruta, por ejemplo `/ruta/al/proyecto/gestor.sh`. Si todavía no existe `venv/bin/python`, el script lo dice y recuerda los comandos de instalación.
 
-Se abre la ventana "Gestor de Enlaces" en la vista de categorías. Cada tarjeta muestra el nombre, cuántos enlaces tiene y el recuento de estados. La primera es Sin categoría. Un control arriba alterna con Todos los enlaces, que es la lista completa. Al pulsar una tarjeta se ven sus enlaces con el estado guardado. Dentro, Verificar categoría está a la derecha de la cabecera y comprueba solo esos: el botón pasa a decir Verificando... y el icono gira, sin barra de progreso. En las tarjetas, Verificar todos queda a la izquierda de Nueva categoría. Pega una dirección en el campo, elige la categoría en el menú de al lado y pulsa Añadir (o Enter). El menú lista Sin categoría, las categorías ya guardadas y Nueva categoría..., que abre el diálogo de creación y deja seleccionada la nueva. Dentro de una categoría, el menú viene con esa. En las tarjetas y en Todos los enlaces, viene en Sin categoría. El enlace nuevo se guarda en la categoría elegida. Aparece al momento como pendiente y, unos segundos después, cambia de color cuando termina la comprobación. La ventana sigue respondiendo mientras tanto.
+Lanzador de escritorio (opcional). Se puede añadir una entrada al menú de aplicaciones con un archivo en `~/.local/share/applications/gestor-de-enlaces.desktop`. Las rutas tienen que ser absolutas y las de este ejemplo hay que cambiarlas por las de tu máquina:
 
-La lista de enlaces, dentro de una categoría o en Todos los enlaces, usa una columna cuando la ventana es estrecha y dos cuando el contenedor llega a unos 960 px, cerca de 1000 px de ventana. Las tarjetas de categorías siguen la misma regla y pueden llegar a tres columnas si el contenedor mide al menos unos 1440 px. Al cambiar el ancho, la rejilla se ajusta un momento después y solo se vuelve a pintar si cambia el número de columnas. El scroll y los filtros se quedan como estaban. El título, la URL, las notas y la fecha de verificación se cortan con puntos suspensivos para que los botones de la fila sigan visibles. Bajo el estado se lee `verificado 18/10/2026`, o `sin verificar` si el enlace está pendiente y nunca se comprobó.
+```ini
+[Desktop Entry]
+Type=Application
+Name=Gestor de Enlaces
+Comment=Guardar enlaces web y comprobar si responden
+Exec=/home/ale/Documents/projects/link_manager/gestor.sh
+Path=/home/ale/Documents/projects/link_manager
+Terminal=false
+Categories=Utility;
+```
 
-En cada fila hay cuatro botones de icono: Editar, Abrir (también vale el doble clic sobre el texto), Copiar URL y Eliminar. Editar cambia el título, la categoría y las notas. La categoría se elige en un menú, y desde ahí también se puede crear una nueva. Obtener título de nuevo vuelve a leer el título de la página. Abrir lanza el navegador predeterminado y marca el enlace como visitado. Copiar cambia el icono a una marca de verificación durante un segundo. Eliminar pide confirmación. Si pegas el mismo enlace con otra forma (`example.com` y `https://example.com/`), la aplicación avisa y no lo añade otra vez. Si pegas varias líneas, cada línea es un enlace y todas quedan en la categoría elegida en el menú: las vacías se saltan, las que no son http o https se cuentan y las repetidas no se guardan.
+Después, si el menú no lo muestra, `update-desktop-database ~/.local/share/applications` vuelve a leer esa carpeta.
 
-Verificar todos comprueba la lista entera, también los enlaces que el filtro oculta. En las tarjetas está a la izquierda de Nueva categoría. En Todos los enlaces sigue en su fila, junto a la barra. Aparecen una barra, el texto "8 de 25 (32%)" y el botón Cancelar. Dentro de una categoría ese botón no está. Como máximo hay 8 comprobaciones a la vez, y se puede seguir usando la ventana. Cancelar no corta lo que ya salió a la red: eso termina y se anota. El resto no se inicia. Verificar categoría no usa esa barra: gira su propio icono hasta que termina. Si sales de la sección, la comprobación sigue y los resultados se guardan.
+### Windows
 
-En la vista de tarjetas, Nueva categoría pide un nombre. Uno vacío, repetido o igual a Sin categoría, Todas, Nueva categoría o Nueva categoría... no se guarda. Cada tarjeta tiene botones de icono: Abrir todos, Verificar categoría, Renombrar y Eliminar. Sin categoría no se renombra ni se elimina. Abrir todos pide confirmación si hay más de 5 enlaces, y marca como visitados los que el navegador abre. Verificar categoría, en la tarjeta y otra vez dentro de la sección, comprueba solo esos enlaces. El icono de ese botón gira mientras dura. Una categoría vacía avisa y no arranca. Entrar en la sección no lanza esa comprobación. Eliminar pregunta si los enlaces pasan a Sin categoría, que es la opción marcada al abrir, o si se borran también.
+La activación con `Activate.ps1` solo dura en esa ventana de PowerShell. Al cerrarla hay que activar otra vez.
 
-En Todos los enlaces, y también dentro de una categoría, hay un buscador y menús. El buscador mira título, URL, notas y categoría en cada tecla, sin distinguir mayúsculas. El primer menú deja ver todos, un estado (pendiente, activo, error o caído) o si el enlace está visitado. En Todos los enlaces, el segundo filtra por categoría: Todas, Sin categoría o una de las guardadas, aunque todavía no tenga enlaces. Dentro de una categoría ese menú no aparece, porque la sección ya la eligió, y un botón vuelve a las tarjetas. La barra inferior cuenta toda la colección, por ejemplo "12 activos, 3 caídos, 2 errores, 5 pendientes". Ahí también están Importar, Exportar y Reintentar caídos. Exportar escribe un CSV con todos los enlaces, no solo los que se ven. Importar añade los nuevos, conserva los que ya estaban y crea las categorías que falten. El formato del archivo está en la sección "Formato del CSV".
+```powershell
+# (a) Con el entorno activado, en la carpeta del proyecto
+.\venv\Scripts\Activate.ps1
+python main.py
 
-Sin activar el entorno:
+# (b) Sin activar el entorno. No depende de la política de ejecución.
+.\venv\Scripts\python.exe main.py
+```
 
-- Windows: `.\venv\Scripts\python.exe main.py`
-- Debian: `./venv/bin/python main.py`
+Si PowerShell rechaza `Activate.ps1`, la forma (b) abre la aplicación igual. El detalle de la directiva de ejecución está en "Instalación en Windows".
+
+## Ejecutar la aplicación
+
+Con cualquiera de los comandos de "Uso diario" se abre la ventana "Gestor de Enlaces".
+
+Al entrar ves tus categorías en tarjetas. La primera es Sin categoría. Cada una muestra cuántos enlaces tiene y cuántos están activos, caídos, con error o pendientes. Arriba puedes cambiar a Todos los enlaces para ver la lista completa. Pulsa una tarjeta para entrar en ella.
+
+Para guardar un enlace, pega la dirección, elige la categoría y pulsa Añadir (o Enter). En el menú están Sin categoría, las que ya creaste y Nueva categoría..., que crea una y la deja elegida. Dentro de una categoría el menú empieza en esa. En el resto de la ventana empieza en Sin categoría. El enlace aparece enseguida como pendiente y cambia de color cuando termina la comprobación. Mientras tanto puedes seguir usando la ventana.
+
+En cada fila tienes Editar, Abrir, Copiar y Eliminar. Abrir (o el doble clic) lanza el navegador y marca el enlace como visitado. Copiar muestra una marca de verificación un momento. Eliminar pide confirmación. Editar cambia el título, la categoría y las notas. Desde ahí también puedes crear una categoría, o volver a leer el título de la página. Si el enlace ya estaba, aunque lo pegues de otra forma (`example.com` y `https://example.com/`), la aplicación te avisa. Si pegas varias líneas, cada una se guarda en la categoría elegida: se saltan las vacías, se cuentan las que no son una dirección web y no se repiten las que ya tienes.
+
+Si la ventana es estrecha, la lista va en una columna. Al ensancharla pasa a dos, y las tarjetas pueden llegar a tres. El lugar por donde ibas y los filtros se quedan igual. Si un texto no cabe, se corta con puntos suspensivos. Debajo del estado verás `verificado 18/10/2026`, o `sin verificar` si ese enlace nunca se comprobó.
+
+Verificar todos revisa la colección entera. En las tarjetas está a la izquierda de Nueva categoría. En Todos los enlaces aparece junto a una barra, un contador como "8 de 25 (32%)" y Cancelar. Hay como máximo 8 comprobaciones a la vez. Cancelar deja acabar las que ya empezaron. Dentro de una categoría el botón es Verificar categoría: pasa a decir Verificando... y el icono gira. Puedes salir de esa categoría y la comprobación sigue. Una categoría vacía te avisa y no empieza. Abrir una categoría no comprueba nada por sí sola.
+
+Nueva categoría pide un nombre. Hace falta que no esté vacío, que no se repita y que no sea Sin categoría, Todas, Nueva categoría ni Nueva categoría.... Sin categoría se queda fija. En cada tarjeta puedes abrir todos sus enlaces (si hay más de 5, pide confirmación), verificarlos, renombrar la categoría o eliminarla. Al eliminar puedes dejar los enlaces en Sin categoría, que es la opción marcada, o borrarlos con ella.
+
+Para encontrar un enlace, escribe en el buscador: mira el título, la dirección, las notas y la categoría, sin distinguir mayúsculas. Los menús filtran por estado, por si ya lo visitaste y, en Todos los enlaces, por categoría. Abajo, la barra resume toda la colección, por ejemplo "12 activos, 3 caídos, 2 errores, 5 pendientes". Desde ahí puedes importar, exportar o reintentar los caídos. Exportar guarda todos los enlaces. Importar añade los nuevos y crea las categorías que falten. El formato está en "Formato del CSV".
 
 ## Ejecutar las pruebas de consola
 
@@ -85,12 +130,13 @@ Sin activar el entorno:
 python main.py --probar
 ```
 
-En Debian, el mismo comando con el entorno activado. Escribe líneas `OK` o `FALLO` y termina con un resumen. El código de salida es 0 solo cuando todas las pruebas pasan. No abre la ventana. Las tres pruebas de red necesitan internet.
+En Debian, el mismo comando con el entorno activado, o `./gestor.sh --probar`. Escribe líneas `OK` o `FALLO` y termina con un resumen. El código de salida es 0 solo cuando todas las pruebas pasan. No abre la ventana. Las tres pruebas de red necesitan internet.
 
 ## Estructura del proyecto
 
 ```text
 link_manager/
+  gestor.sh           Arranque en Debian; localiza el proyecto y usa el Python del venv
   main.py             Abre la ventana; con --probar lanza las pruebas
   interfaz.py         Ventana oscura, lista, filtro y resumen
   datos.py            Carga y guardado de data/enlaces.json y CSV
@@ -100,7 +146,9 @@ link_manager/
   README.md           Esta guía
   DOCUMENTACION.md    Diario de decisiones por fase
   .gitignore
-  assets/icons/       SVG Lucide y PNG a 20 px y 40 px
+  assets/icons/       SVG Lucide, PNG a 20 px y 40 px, y LICENSE-lucide.txt
+  GestorDeEnlaces.spec  Receta de PyInstaller; sí se versiona
+  LICENSE             GPL-3.0
   data/               enlaces.json y gestor.log; no se versiona
   venv/               Entorno local; no se versiona
 ```
@@ -179,10 +227,10 @@ Hasta esta fase:
 ## Ramas
 
 - `master`: rama estable. Solo recibe cambios cuando se confirma una fusión.
-- `windows`: rama de desarrollo y de prueba en Windows. Todo el trabajo diario va aquí.
-- `debian`: se creará más adelante para validar el mismo código en Linux. Aún no existe.
+- `windows`: rama de desarrollo y de prueba en Windows.
+- `debian`: el mismo programa, validado en Debian. Los comandos de Linux de esta guía se probaron en esta rama.
 
-Estás en `windows` para desarrollar. `master` aparece en el primer commit, apuntando a ese mismo punto, y no se vuelve a tocar hasta que pidas la fusión:
+`master` aparece en el primer commit y no se vuelve a tocar hasta que se pida la fusión. Desde `windows`:
 
 ```bash
 git checkout master
@@ -218,9 +266,9 @@ git checkout windows
 
 ## Crear un ejecutable
 
-PyInstaller no está en `requirements.txt`: solo hace falta para empaquetar. Con el entorno activado, en la carpeta del proyecto:
+PyInstaller no está en `requirements.txt`: solo hace falta para empaquetar. Con el entorno activado, en la carpeta del proyecto, el comando es el mismo en PowerShell y en bash:
 
-```powershell
+```bash
 pip install pyinstaller
 ```
 
@@ -238,4 +286,21 @@ pyinstaller --noconfirm --windowed --name GestorDeEnlaces --collect-all customtk
 
 El resultado queda en `dist/GestorDeEnlaces/`. En Windows el programa es `GestorDeEnlaces.exe`. En Debian es `GestorDeEnlaces`, sin extensión. `assets/icons/` viaja dentro del paquete. `data/enlaces.json` y `data/gestor.log` se crean junto al ejecutable la primera vez que se abre, no dentro del paquete: así no se borran al volver a generarlo. Si esa carpeta no se puede escribir, los dos archivos pasan a la carpeta de configuración del usuario, la misma de la sección "Dónde se guardan los enlaces". `--windowed` no abre consola; un fallo de arranque se lee en `gestor.log`.
 
-`build/`, `dist/` y el archivo `.spec` no se versionan.
+La copia de Windows regenerada el 18 de octubre de 2026 se hizo con PyInstaller 6.22.3. La carpeta `dist/GestorDeEnlaces/` ocupa unos 47 MB sin contar `data/`, porque esa carpeta aparece al abrir el programa.
+
+La copia de Debian generada el mismo día se hizo con PyInstaller 6.22.3 y Python 3.11.2. La carpeta ocupa 56 MB (635 archivos, 56198544 bytes) sin contar `data/`.
+
+`build/` y `dist/` no se versionan. `GestorDeEnlaces.spec` sí: guarda la receta del ejecutable y no contiene rutas de esta máquina.
+
+## Licencia
+
+Gestor de Enlaces se publica bajo la [GPL-3.0](LICENSE). El texto completo está en ese archivo. Cada módulo `.py` lleva un encabezado que remite a él.
+
+## Créditos y licencias de terceros
+
+Estas licencias se comprobaron en los archivos que instala `pip` y, para Lucide, en la etiqueta 0.469.0 del repositorio. Las cuatro se pueden combinar con la GPL-3.0: son permisivas, o en el caso de Apache-2.0 la Free Software Foundation la considera compatible con la GPL-3.0.
+
+- CustomTkinter 6.0.0, de Tom Schimansky. El archivo `LICENSE` de la rueda es MIT (copyright 2023). En PyPI el campo de licencia dice CC0 y el clasificador dice MIT; manda el texto que viaja con el paquete, que es MIT. https://github.com/TomSchimansky/CustomTkinter
+- requests 2.34.2, de Python Software Foundation. Apache-2.0. https://github.com/psf/requests
+- Pillow 12.3.0. MIT-CMU, la licencia histórica de PIL: copyright 1997-2011 Secret Labs AB, 1995-2011 Fredrik Lundh, y desde 2010 Jeffrey A. Clark y colaboradores. https://github.com/python-pillow/Pillow
+- Iconos Lucide 0.469.0. ISC. Parte del copyright (2013-2022) es de Cole Bemis, por Feather (MIT); el resto (2022) es de Lucide Contributors. El aviso está en `assets/icons/LICENSE-lucide.txt`. https://github.com/lucide-icons/lucide/blob/0.469.0/LICENSE

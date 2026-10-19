@@ -1,3 +1,4 @@
+# Gestor de Enlaces. Licencia GPL-3.0. El texto está en LICENSE.
 """Persistencia de categorías y enlaces en un archivo JSON.
 
 El archivo vive en data/ junto a este módulo cuando esa carpeta se puede

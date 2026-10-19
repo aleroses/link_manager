@@ -1,3 +1,4 @@
+# Gestor de Enlaces. Licencia GPL-3.0. El texto está en LICENSE.
 """Registro de errores en gestor.log, junto a los datos.
 
 El archivo rota al llegar a un tamaño fijo. Así se puede diagnosticar
