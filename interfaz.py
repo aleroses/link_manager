@@ -12,6 +12,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -39,6 +40,10 @@ ANCHO_MINIMO_COLUMNA = 480
 MAX_COLUMNAS_ENLACES = 2
 MAX_COLUMNAS_TARJETAS = 3
 DEBOUNCE_REDIMENSION_MS = 150
+# Una pasada de la cola pinta como mucho una vez por este intervalo.
+AGRUPAR_REPINTADO_MS = 150
+# El buscador espera a la última tecla antes de refiltrar.
+DEBOUNCE_BUSQUEDA_MS = 150
 # Vueltas del icono de carga. 12 fotogramas cada 80 ms.
 FOTOGRAMAS_CARGA = 12
 INTERVALO_CARGA_MS = 80
@@ -380,6 +385,14 @@ class Aplicacion(ctk.CTk):
         self._after_redimension: str | None = None
         self._after_resultados: str | None = None
         self._after_ocultar: str | None = None
+        self._after_repintado: str | None = None
+        self._after_busqueda: str | None = None
+        self._vista_sucia = False
+        self._repintado_enlaces: list[dict] = []
+        self._guardado_pendiente = False
+        self._sin_conexion_suelto = False
+        # 0: todavía no hubo un pintado agrupado, así que el primero es inmediato.
+        self._ultimo_repintado = 0.0
         self._filtro = "todos"
         self._filtro_categoria = "todas"
         self._categoria_alta = ETIQUETA_SIN_CATEGORIA
@@ -863,7 +876,11 @@ class Aplicacion(ctk.CTk):
             )
 
     def _recoger_resultados(self) -> None:
-        """Aplica lo que los hilos de red ya terminaron. Corre en el hilo principal."""
+        """Aplica lo que los hilos de red ya terminaron. Corre en el hilo principal.
+
+        Vacía la cola, escribe el JSON una vez y deja el pintado para una
+        sola pasada, como mucho cada AGRUPAR_REPINTADO_MS.
+        """
         if self._cerrando:
             return
         try:
@@ -871,34 +888,164 @@ class Aplicacion(ctk.CTk):
                 return
         except Exception:
             return
-        try:
-            while True:
-                self._consumir_resultado(self._resultados.get_nowait())
-        except queue.Empty:
-            pass
+        if self._after_resultados is not None:
+            try:
+                self.after_cancel(self._after_resultados)
+            except Exception:
+                pass
+            self._after_resultados = None
+        cambios, cierres = self._vaciar_cola()
+        if cambios:
+            self._guardar_tanda()
+            self._pintar_resumen()
+        for lote, contado in cierres:
+            self._cerrar_trabajo(lote, contado=contado)
+        if cambios and not self._cerrando:
+            self._pedir_repintado(cambios)
         if self._cerrando:
             return
         self._after_resultados = self.after(100, self._recoger_resultados)
 
-    def _consumir_resultado(self, item: tuple) -> None:
-        tipo = item[0]
-        if tipo == "omitido":
-            _, lote = item
-            self._cerrar_trabajo(lote, contado=False)
+    def _vaciar_cola(self) -> tuple[list[dict], list[tuple[int | None, bool]]]:
+        """Aplica la cola entera. No guarda ni pinta.
+
+        El segundo valor es cada cierre de lote: el número de lote y si
+        cuenta como comprobación hecha. Un resultado ignorado (enlace
+        borrado o token viejo) también cierra su puesto en la barra.
+        """
+        cambios: list[dict] = []
+        cierres: list[tuple[int | None, bool]] = []
+        try:
+            while True:
+                item = self._resultados.get_nowait()
+                tipo = item[0]
+                if tipo == "omitido":
+                    cierres.append((item[1], False))
+                    continue
+                if tipo == "titulo_dialogo":
+                    _, dialogo_id, token, texto = item
+                    self._aplicar_titulo_dialogo(dialogo_id, token, texto)
+                    continue
+                motivo = item[8] if len(item) > 8 else ""
+                _, enlace, estado, codigo, titulo, momento, lote, token = item[:8]
+                if self._escribir_resultado(
+                    enlace, estado, codigo, titulo, momento, token, motivo, lote
+                ):
+                    cambios.append(enlace)
+                cierres.append((lote, True))
+        except queue.Empty:
+            pass
+        return cambios, cierres
+
+    def _guardar_tanda(self) -> None:
+        """Un guardado para todos los resultados ya aplicados."""
+        if not self._guardado_pendiente:
             return
-        if tipo == "titulo_dialogo":
-            _, dialogo_id, token, texto = item
-            self._aplicar_titulo_dialogo(dialogo_id, token, texto)
+        try:
+            self._guardar()
+        except OSError as exc:
+            self._fallo_al_guardar = True
+            self._sin_conexion_suelto = False
+            if not self._verificacion_masiva:
+                try:
+                    self.aviso.configure(
+                        text=_mensaje_permiso(
+                            exc,
+                            "No se pudo guardar el resultado de la verificación.",
+                        )
+                    )
+                except Exception:
+                    pass
             return
-        motivo = item[8] if len(item) > 8 else ""
-        _, enlace, estado, codigo, titulo, momento, lote, token = item[:8]
-        self._escribir_resultado(enlace, estado, codigo, titulo, momento, token, motivo, lote)
-        self._cerrar_trabajo(lote, contado=True)
+        self._guardado_pendiente = False
+        if self._sin_conexion_suelto:
+            self._sin_conexion_suelto = False
+            try:
+                self.aviso.configure(
+                    text="No hay conexión a internet. El enlace queda como caído."
+                )
+            except Exception:
+                pass
+
+    def _pedir_repintado(self, enlaces: list[dict]) -> None:
+        """Marca la vista sucia y pinta ahora, o como mucho una vez cada 150 ms."""
+        self._vista_sucia = True
+        vistos = {id(item) for item in self._repintado_enlaces}
+        for enlace in enlaces:
+            if id(enlace) not in vistos:
+                self._repintado_enlaces.append(enlace)
+                vistos.add(id(enlace))
+        if self._after_repintado is not None or self._cerrando:
+            return
+        transcurrido_ms = (time.monotonic() - self._ultimo_repintado) * 1000
+        if self._ultimo_repintado <= 0 or transcurrido_ms >= AGRUPAR_REPINTADO_MS:
+            self._aplicar_repintado()
+            return
+        espera = max(1, int(AGRUPAR_REPINTADO_MS - transcurrido_ms))
+        self._after_repintado = self.after(espera, self._aplicar_repintado)
+
+    def _aplicar_repintado(self) -> None:
+        """Una reconstrucción, o un retoque de las filas que siguen a la vista."""
+        self._after_repintado = None
+        if self._cerrando or not self._vista_sucia:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        enlaces = self._repintado_enlaces
+        self._vista_sucia = False
+        self._repintado_enlaces = []
+        self._ultimo_repintado = time.monotonic()
+        if self._mostrando_tarjetas() or self._alguno_cambia_de_filtro(enlaces):
+            self.refrescar_lista()
+            return
+        for enlace in enlaces:
+            self._pintar_fila(enlace)
+        self._pintar_resumen()
+
+    def _fila_en_pantalla(self, enlace: dict) -> bool:
+        info = self._filas.get(id(enlace))
+        if not info:
+            return False
+        try:
+            return bool(info["punto"].winfo_exists())
+        except Exception:
+            return False
+
+    def _alguno_cambia_de_filtro(self, enlaces: list[dict]) -> bool:
+        """True si algún enlace de la tanda entra o sale de lo que se ve."""
+        texto = self._texto_busqueda()
+        consulta = self._categoria_consulta()
+        for enlace in enlaces:
+            visible = self._sigue_en_lista(enlace) and coincide(
+                enlace, self._filtro, texto, consulta
+            )
+            if visible != self._fila_en_pantalla(enlace):
+                return True
+        return False
 
     def _texto_busqueda(self) -> str:
         return self.busqueda.get()
 
     def _al_buscar(self, _evento: object = None) -> None:
+        if self._after_busqueda is not None:
+            try:
+                self.after_cancel(self._after_busqueda)
+            except Exception:
+                pass
+        self._after_busqueda = self.after(DEBOUNCE_BUSQUEDA_MS, self._aplicar_busqueda)
+
+    def _aplicar_busqueda(self) -> None:
+        self._after_busqueda = None
+        if self._cerrando:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
         self.refrescar_lista()
 
     def _al_cambiar_filtro(self, etiqueta: str) -> None:
@@ -2299,6 +2446,8 @@ class Aplicacion(ctk.CTk):
             self._after_ocultar,
             self._after_redimension,
             self._after_carga,
+            self._after_repintado,
+            self._after_busqueda,
         ):
             if identificador is None:
                 continue
@@ -2306,8 +2455,31 @@ class Aplicacion(ctk.CTk):
                 self.after_cancel(identificador)
             except Exception:
                 pass
+        self._after_resultados = None
+        self._after_ocultar = None
+        self._after_redimension = None
+        self._after_carga = None
+        self._after_repintado = None
+        self._after_busqueda = None
+        self._vista_sucia = False
+        self._repintado_enlaces = []
         self._ejecutor.shutdown(wait=False, cancel_futures=True)
+        self._guardar_al_cerrar()
         self.destroy()
+
+    def _guardar_al_cerrar(self) -> None:
+        """Escribe la tanda que seguía en la cola o que no llegó al disco."""
+        try:
+            self._vaciar_cola()
+        except Exception:
+            pass
+        if not self._guardado_pendiente:
+            return
+        try:
+            self._guardar()
+            self._guardado_pendiente = False
+        except OSError:
+            pass
 
     def _sigue_en_lista(self, enlace: dict) -> bool:
         return any(item is enlace for item in self.enlaces)
@@ -2322,17 +2494,21 @@ class Aplicacion(ctk.CTk):
         token: int,
         motivo: str = "",
         lote: int | None = None,
-    ) -> None:
-        """Escribe el resultado en la lista. Solo se llama desde el hilo principal."""
+    ) -> bool:
+        """Aplica el resultado al diccionario. No guarda ni pinta.
+
+        True si el enlace cambió. El guardado y el pintado van una vez
+        por pasada, en _recoger_resultados.
+        """
         try:
             if not self.winfo_exists():
-                return
+                return False
         except Exception:
-            return
+            return False
         if not self._sigue_en_lista(enlace):
-            return
+            return False
         if self._token_por_enlace.get(id(enlace)) != token:
-            return
+            return False
 
         enlace["estado"] = estado
         enlace["codigo_http"] = codigo
@@ -2344,25 +2520,13 @@ class Aplicacion(ctk.CTk):
         if decision is not None:
             enlace["titulo"], enlace["titulo_manual"] = decision
         enlace["ultima_verificacion"] = momento
-        try:
-            self._guardar()
-        except OSError as exc:
-            self._fallo_al_guardar = True
-            if not self._verificacion_masiva:
-                self.aviso.configure(
-                    text=_mensaje_permiso(
-                        exc,
-                        "No se pudo guardar el resultado de la verificación.",
-                    )
-                )
-        self._pintar_fila(enlace)
-        if motivo == verificador.MOTIVO_SIN_CONEXION and not self._fallo_al_guardar:
+        self._guardado_pendiente = True
+        if motivo == verificador.MOTIVO_SIN_CONEXION:
             if lote is None:
-                self.aviso.configure(
-                    text="No hay conexión a internet. El enlace queda como caído."
-                )
+                self._sin_conexion_suelto = True
             else:
                 self._sin_conexion = True
+        return True
 
     def _presentacion(self, enlace: dict) -> tuple[str, str, str]:
         estado = str(enlace.get("estado") or "pendiente")
@@ -2375,29 +2539,16 @@ class Aplicacion(ctk.CTk):
         return titulo, detalle, color
 
     def _pintar_fila(self, enlace: dict) -> None:
-        """Actualiza la fila si sigue a la vista. Si entra o sale del filtro, redibuja."""
-        self._pintar_resumen()
-        if self._mostrando_tarjetas():
-            self.refrescar_lista()
-            return
-        visible = coincide(enlace, self._filtro, self._texto_busqueda(), self._categoria_consulta())
+        """Retoca la fila si sigue a la vista. No reconstruye la lista."""
         info = self._filas.get(id(enlace))
-        en_pantalla = False
-        if info:
-            try:
-                en_pantalla = bool(info["punto"].winfo_exists())
-            except Exception:
-                en_pantalla = False
-        if visible and en_pantalla and info is not None:
-            titulo, detalle, color = self._presentacion(enlace)
-            info["punto"].configure(fg_color=color)
-            self._actualizar_recorte(info["titulo"], titulo)
-            self._actualizar_recorte(info["detalle"], detalle)
-            info["detalle"].configure(text_color=color)
-            self._pintar_fecha(info.get("fecha"), texto_ultima_verificacion(enlace))
+        if not info or not self._fila_en_pantalla(enlace):
             return
-        if visible != en_pantalla:
-            self.refrescar_lista()
+        titulo, detalle, color = self._presentacion(enlace)
+        info["punto"].configure(fg_color=color)
+        self._actualizar_recorte(info["titulo"], titulo)
+        self._actualizar_recorte(info["detalle"], detalle)
+        info["detalle"].configure(text_color=color)
+        self._pintar_fecha(info.get("fecha"), texto_ultima_verificacion(enlace))
 
     def _pintar_fecha(self, etiqueta: ctk.CTkLabel | None, texto: str) -> None:
         """Muestra la fecha bajo el estado. Sin texto, no ocupa sitio."""

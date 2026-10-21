@@ -216,8 +216,8 @@ Hasta esta fase:
 - Avisar si el enlace ya está en la lista, aunque cambie el esquema, las mayúsculas, la barra final o el fragmento `#...`.
 - Pegar varios enlaces de una vez, uno por línea. Todos los nuevos quedan en la categoría elegida en el menú. Los repetidos no se guardan.
 - Verificar todos los enlaces, con un máximo de 8 comprobaciones a la vez. El filtro no reduce esa tanda.
-- Barra de progreso, contador "8 de 25 (32%)" y botón Cancelar. Los resultados solo se pintan en el hilo principal.
-- Buscar por título, URL, notas o categoría, al escribir, sin distinguir mayúsculas.
+- Barra de progreso, contador "8 de 25 (32%)" y botón Cancelar. Los resultados solo se pintan en el hilo principal. Cada pasada de la cola guarda el JSON una vez. La lista se repinta como mucho cada 150 ms: si las filas siguen a la vista se retocan en el sitio; en las tarjetas, o si un enlace entra o sale del filtro, la vista se reconstruye una sola vez. La barra, el contador y el icono de carga siguen al día en cada pasada.
+- Buscar por título, URL, notas o categoría, sin distinguir mayúsculas. El filtro espera 150 ms después de la última tecla.
 - Filtrar por estado y, a la vez, por categoría (Todas, Sin categoría o una de las guardadas).
 - Resumen fijo de toda la colección: "12 activos, 3 caídos, 2 errores, 5 pendientes".
 - Reintentar caídos, con el mismo tope de 8 comprobaciones y la misma barra de progreso.

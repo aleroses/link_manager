@@ -222,3 +222,21 @@ Phase 13: research UI performance
 EOF
 )"
 ```
+
+## Resultados Fase 14
+
+Medido el 20 de octubre de 2026, en la misma máquina y con la misma ventana de 1000×680. El canvas volvió a medir 951 px. El script está en `/tmp/medir_rendimiento_fase14.py` y no forma parte del repositorio. Los datos de prueba se escribieron en `/tmp/fase14_medicion`. `data/enlaces.json`, `data/enlaces.csv` y `data/gestor.log` quedaron con el mismo tamaño y la misma fecha.
+
+Cada caso tiene 50 enlaces. El tiempo de las tarjetas no depende de esa cantidad: depende de las tarjetas. Seis son Sin categoría más 5, veintiuna más 20, y cincuenta y una más 50. Los widgets de la lista coinciden con el informe: 157, 562 y 1372.
+
+La ráfaga son 30 resultados ya encolados, una pasada. Al lado, un pintado suelto de `refrescar_lista` en la misma ventana, para comparar con el mismo arranque.
+
+| Tarjetas | Un pintado | Ráfaga de 30 | Reconstrucciones | Guardados | Antes |
+| --- | --- | --- | --- | --- | --- |
+| 6 | 0,43 s | 0,42 s | 1 | 1 | 11,3–12,6 s |
+| 21 | 1,63 s | 1,59 s | 1 | 1 | 38,5–43,0 s |
+| 51 | 3,45 s | 3,50 s | 1 | 1 | 96–108 s |
+
+La ráfaga queda en el tiempo de ese pintado. El de 21 tarjetas, 1,63 s, está un poco por encima del 1,28–1,46 s del informe; la ráfaga no lo multiplica. El de 51 tarjetas, 3,45 s, cae en el 3,19–3,44 s medido entonces, y la ráfaga es 3,50 s. El guardado de este JSON, con 50 enlaces, fue de menos de 1 ms. El extremo de 108 s del informe era 1000 enlaces y 50 categorías; el pintado de esas 51 tarjetas ya era de unos 3,5 s, y es ese tiempo el que ahora cuesta la ráfaga.
+
+`python main.py --probar` terminó con 68 pruebas correctas y 0 fallos.

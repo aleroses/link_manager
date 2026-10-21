@@ -647,3 +647,37 @@ Ninguno de ejecución. El cambio es solo de guía.
 ### Pendientes
 
 - `windows` sigue en el commit de la Fase 8.4 hasta que, en esa rama, se ejecute `git merge master`.
+
+## 2026-10-20 — Fase 14: agrupar repintado y guardado
+
+### Qué se hizo
+
+Cada pasada de la cola aplica todos los resultados que ya llegaron, escribe el JSON una vez y pinta la vista como mucho cada 150 ms. En la lista, si las filas siguen a la vista, se retocan el punto, el título, el detalle y la fecha. En las tarjetas, o si algún enlace entra o sale del filtro, hay una sola llamada a `refrescar_lista`. La barra, el contador y el icono de carga se actualizan en la pasada. El buscador espera 150 ms tras la última tecla y cancela la espera anterior. Al cerrar se cancelan esos `after` y, si quedaba una tanda sin escribir, se guarda.
+
+### Decisiones técnicas y por qué
+
+- El guardado es uno por pasada de la cola (el `after` de 100 ms). El pintado es otro reloj: si el anterior tiene menos de 150 ms, se aplaza el resto y no se reinicia el temporizador. Así una ráfaga continua no se retrasa más de 150 ms, y 30 resultados ya encolados pintan dentro de esa misma pasada. La primera pasada pinta en el acto.
+- El buscador sí reinicia la espera, igual que el redimensionado: solo importa la última tecla. Los menús de estado y de categoría siguen refiltrando al momento.
+- La barra se cierra después del guardado. Si el disco falla, el aviso de error sigue ganando a "Verificación terminada".
+- Al cerrar no se pinta. Se vacía la cola y se escribe si los datos no llegaron al disco. Lo que todavía esté en la red se pierde igual que antes.
+
+### Archivos creados o modificados
+
+- `interfaz.py`
+- `main.py`
+- `README.md`
+- `DOCUMENTACION.md`
+- `docs/INVESTIGACION-RENDIMIENTO.md`
+
+### Problemas encontrados y cómo se resolvieron
+
+`python main.py --probar` terminó con 68 pruebas correctas y 0 fallos. Las 63 anteriores siguen pasando. Las cinco nuevas cubren la ráfaga de 30 en tarjetas (1 guardado, 1 reconstrucción y la barra en "30 de 30 (100%)"), la misma ráfaga en la lista con filas visibles (0 reconstrucciones y 1 guardado), un resultado que sale del filtro (1 reconstrucción), ocho teclas del buscador (1 refiltrado) y el cierre con una tanda todavía en la cola.
+
+La medición, en la misma ventana de 1000×680 y con el JSON en `/tmp`, comparó la ráfaga con un pintado suelto. Seis tarjetas: 0,42 s frente a 0,43 s. Veintiuna: 1,59 s frente a 1,63 s. Cincuenta y una: 3,50 s frente a 3,45 s. Antes eran unos 11 s, 40 s y 108 s. En los tres casos hubo 1 llamada a `refrescar_lista` y 1 a `guardar_enlaces`. `data/enlaces.json`, `data/enlaces.csv` y `data/gestor.log` quedaron con el mismo tamaño y la misma fecha. El detalle está en "Resultados Fase 14" del informe.
+
+Al destruir la ventana, Tk avisa de `update` y `check_dpi_scaling`. Son `after` internos de CustomTkinter. Los de la cola, el repintado, la búsqueda, el redimensionado y la carga quedan cancelados antes.
+
+### Pendientes
+
+- Actualizar en el sitio el resumen de una tarjeta, sin reconstruir la rejilla.
+- No fusionar con `master` ni tocar `windows` ni `v1.0.0` hasta que se pida.

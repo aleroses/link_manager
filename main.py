@@ -944,6 +944,207 @@ def probar_columnas(informe: _Comprobaciones) -> None:
             app._al_cerrar()
 
 
+def _encolar_resultado(app, enlace: dict, estado: str, lote: int | None = None) -> None:
+    app._token += 1
+    token = app._token
+    app._token_por_enlace[id(enlace)] = token
+    app._resultados.put(
+        (
+            "resultado",
+            enlace,
+            estado,
+            200,
+            f"Titulo {token}",
+            "2026-10-20T12:00:00+00:00",
+            lote,
+            token,
+            "",
+        )
+    )
+
+
+def _pintado_inmediato(app) -> None:
+    """La pasada de prueba pinta ya, sin esperar los 150 ms de la anterior."""
+    app._ultimo_repintado = 0.0
+    if app._after_repintado is not None:
+        try:
+            app.after_cancel(app._after_repintado)
+        except Exception:
+            pass
+        app._after_repintado = None
+    app._vista_sucia = False
+    app._repintado_enlaces = []
+
+
+def probar_repintado(informe: _Comprobaciones) -> None:
+    import time
+
+    import customtkinter as ctk
+
+    import interfaz
+
+    ctk.set_appearance_mode("dark")
+    original = datos.guardar_enlaces
+    llamadas = {"guardar": 0, "refrescar": 0}
+
+    def _contar_guardado(coleccion: dict, ruta: Path | None = None) -> None:
+        llamadas["guardar"] += 1
+        original(coleccion, ruta)
+
+    datos.guardar_enlaces = _contar_guardado
+    app = None
+    try:
+        with tempfile.TemporaryDirectory() as carpeta:
+            ruta = Path(carpeta) / "enlaces.json"
+            coleccion = datos.coleccion_vacia()
+            datos.crear_categoria(coleccion, "Alfa")
+            for indice in range(30):
+                enlace = datos.enlace_nuevo(f"https://example.com/item-{indice}")
+                enlace["titulo"] = f"Titulo {indice}"
+                enlace["categoria"] = "Alfa"
+                coleccion["enlaces"].append(enlace)
+            datos.guardar_enlaces(coleccion, ruta)
+            app = interfaz.Aplicacion(ruta=ruta)
+            app.geometry("900x640")
+            app.update()
+            _cancelar_redimension(app)
+
+            def _refrescar() -> None:
+                llamadas["refrescar"] += 1
+                interfaz.Aplicacion.refrescar_lista(app)
+
+            app.refrescar_lista = _refrescar
+            app._lote = 1
+            app._verificacion_masiva = True
+            app._con_barra = True
+            app._total_lote = 30
+            app._pendientes_lote = 30
+            app._hechos_lote = 0
+            app._fallo_al_guardar = False
+            app._sin_conexion = False
+            app._cancelar_lote = None
+            app._mostrar_progreso()
+            for enlace in app.enlaces:
+                _encolar_resultado(app, enlace, "activo", lote=1)
+            llamadas["guardar"] = 0
+            llamadas["refrescar"] = 0
+            _pintado_inmediato(app)
+            app._recoger_resultados()
+            informe.comprobar(
+                llamadas["guardar"] == 1
+                and llamadas["refrescar"] == 1
+                and app.texto_progreso.cget("text") == "30 de 30 (100%)"
+                and all(enlace.get("estado") == "activo" for enlace in app.enlaces),
+                "treinta resultados en tarjetas guardan y pintan una vez",
+                f"guardar={llamadas['guardar']} refrescar={llamadas['refrescar']} "
+                f"progreso={app.texto_progreso.cget('text')}",
+            )
+            if app._after_ocultar is not None:
+                try:
+                    app.after_cancel(app._after_ocultar)
+                except Exception:
+                    pass
+                app._after_ocultar = None
+
+            app._al_cambiar_vista("Todos los enlaces")
+            app.update()
+            _cancelar_redimension(app)
+            primero = app.enlaces[0]
+            punto = app._filas[id(primero)]["punto"]
+            for enlace in app.enlaces:
+                _encolar_resultado(app, enlace, "caído")
+            llamadas["guardar"] = 0
+            llamadas["refrescar"] = 0
+            _pintado_inmediato(app)
+            app._recoger_resultados()
+            color = punto.cget("fg_color")
+            if isinstance(color, (list, tuple)):
+                color = color[-1]
+            informe.comprobar(
+                llamadas["guardar"] == 1
+                and llamadas["refrescar"] == 0
+                and punto is app._filas[id(primero)]["punto"]
+                and punto.winfo_exists()
+                and color == interfaz.COLORES_ESTADO["caído"]
+                and all(enlace.get("estado") == "caído" for enlace in app.enlaces),
+                "treinta resultados con filas visibles no reconstruyen la lista",
+                f"guardar={llamadas['guardar']} refrescar={llamadas['refrescar']} color={color}",
+            )
+
+            app._al_cambiar_filtro("Caído")
+            app.update()
+            _cancelar_redimension(app)
+            _encolar_resultado(app, primero, "activo")
+            llamadas["guardar"] = 0
+            llamadas["refrescar"] = 0
+            _pintado_inmediato(app)
+            app._recoger_resultados()
+            informe.comprobar(
+                llamadas["guardar"] == 1
+                and llamadas["refrescar"] == 1
+                and primero.get("estado") == "activo",
+                "un resultado que sale del filtro reconstruye la lista una vez",
+                f"guardar={llamadas['guardar']} refrescar={llamadas['refrescar']}",
+            )
+
+            app.busqueda.delete(0, "end")
+            llamadas["refrescar"] = 0
+            _cancelar_redimension(app)
+            for _ in range(8):
+                app.busqueda.insert("end", "x")
+                app._al_buscar()
+            pendiente = llamadas["refrescar"] == 0 and app._after_busqueda is not None
+            fin = time.perf_counter() + 0.45
+            while time.perf_counter() < fin:
+                app.update()
+                _cancelar_redimension(app)
+            informe.comprobar(
+                pendiente and llamadas["refrescar"] == 1,
+                "ocho teclas del buscador refiltran una vez",
+                f"pendiente={pendiente} refrescar={llamadas['refrescar']}",
+            )
+
+            objetivo = app.enlaces[1]
+            _encolar_resultado(app, objetivo, "error")
+            app._al_buscar()
+            if app._after_repintado is not None:
+                try:
+                    app.after_cancel(app._after_repintado)
+                except Exception:
+                    pass
+                app._after_repintado = None
+            app._ultimo_repintado = time.monotonic()
+            app._pedir_repintado([objetivo])
+            habia_despues = (
+                app._after_busqueda is not None and app._after_repintado is not None
+            )
+            url_objetivo = str(objetivo.get("url") or "")
+            app._al_cerrar()
+            guardado = json.loads(ruta.read_text(encoding="utf-8"))
+            escrito = next(
+                item
+                for item in guardado["enlaces"]
+                if item.get("url") == url_objetivo
+            )
+            informe.comprobar(
+                habia_despues
+                and app._after_busqueda is None
+                and app._after_repintado is None
+                and app._after_resultados is None
+                and not app._guardado_pendiente
+                and escrito.get("estado") == "error",
+                "cerrar con una tanda pendiente no pierde el guardado",
+                f"estado={escrito.get('estado')} pendiente={app._guardado_pendiente}",
+            )
+    finally:
+        datos.guardar_enlaces = original
+        if app is not None and not app._cerrando:
+            try:
+                app._al_cerrar()
+            except Exception:
+                pass
+
+
 def main() -> int:
     _configurar_salida()
     informe = _Comprobaciones()
@@ -957,6 +1158,8 @@ def main() -> int:
     probar_alta(informe)
     print("Columnas")
     probar_columnas(informe)
+    print("Repintado")
+    probar_repintado(informe)
     print("CSV")
     probar_csv(informe)
     print("Diagnóstico")
